@@ -1,0 +1,22 @@
+# secrets — never commit a key
+.env
+*.env.local
+
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+venv/
+.venv/
+
+# report/eval outputs (generated, not source — regenerate via the CLI)
+/reports/
+/out/
+*.report.json
+
+# editor/OS cruft
+.DS_Store
+.vscode/
+.idea/
