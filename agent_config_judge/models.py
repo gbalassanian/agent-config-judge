@@ -144,3 +144,122 @@ class AgentSnapshot:
                 f"Synthetic agent snapshot {self.agent_id!r} must carry a synthetic_note "
                 "explaining what failure mode it stands in for."
             )
+
+
+# ---------------------------------------------------------------------------
+# JSON (de)serialization — used by the CLI's snapshot files and by the eval
+# harness's golden set. Written by hand rather than dataclasses.asdict()
+# because reconstruction needs typed nested objects back (tuples of
+# ToolConfig, ConversationTurn, etc.), not plain dicts.
+# ---------------------------------------------------------------------------
+
+
+def agent_snapshot_to_dict(snap: AgentSnapshot) -> dict:
+    return {
+        "agent_id": snap.agent_id,
+        "name": snap.name,
+        "arr_usd": snap.arr_usd,
+        "is_synthetic": snap.is_synthetic,
+        "synthetic_note": snap.synthetic_note,
+        "config": {
+            "agent_id": snap.config.agent_id,
+            "name": snap.config.name,
+            "system_prompt": snap.config.system_prompt,
+            "knowledge_base_ids": list(snap.config.knowledge_base_ids),
+            "tools": [
+                {"name": t.name, "tool_type": t.tool_type, "system_tool_type": t.system_tool_type, "detail": t.detail}
+                for t in snap.config.tools
+            ],
+        },
+        "metrics": {
+            "n_conversations_sampled": snap.metrics.n_conversations_sampled,
+            "n_turns_sampled": snap.metrics.n_turns_sampled,
+            "channels_seen": list(snap.metrics.channels_seen),
+            "tool_call_count": snap.metrics.tool_call_count,
+            "tool_error_count": snap.metrics.tool_error_count,
+            "specific_claim_turns": snap.metrics.specific_claim_turns,
+            "specific_claim_turns_without_kb": snap.metrics.specific_claim_turns_without_kb,
+            "escalation_tool_call_count": snap.metrics.escalation_tool_call_count,
+            "conversations_with_escalation": snap.metrics.conversations_with_escalation,
+            "repeated_question_conversations": snap.metrics.repeated_question_conversations,
+            "agent_turns_sampled": snap.metrics.agent_turns_sampled,
+            "negative_sentiment_turns": snap.metrics.negative_sentiment_turns,
+            "turns_with_latency_data": snap.metrics.turns_with_latency_data,
+            "turns_over_latency_band": snap.metrics.turns_over_latency_band,
+        },
+        "conversations": [
+            {
+                "conversation_id": c.conversation_id,
+                "channel": c.channel,
+                "turns": [
+                    {
+                        "role": t.role,
+                        "text": t.text,
+                        "used_static_kb_document_ids": list(t.used_static_kb_document_ids),
+                        "tool_calls": [{"tool_name": tc.tool_name, "is_error": tc.is_error} for tc in t.tool_calls],
+                        "ttfb_ms": t.ttfb_ms,
+                    }
+                    for t in c.turns
+                ],
+            }
+            for c in snap.conversations
+        ],
+    }
+
+
+def agent_snapshot_from_dict(d: dict) -> AgentSnapshot:
+    config_d = d["config"]
+    config = AgentConfigSnapshot(
+        agent_id=config_d["agent_id"],
+        name=config_d["name"],
+        system_prompt=config_d["system_prompt"],
+        knowledge_base_ids=tuple(config_d.get("knowledge_base_ids", [])),
+        tools=tuple(
+            ToolConfig(name=t["name"], tool_type=t["tool_type"], system_tool_type=t.get("system_tool_type"), detail=t.get("detail", ""))
+            for t in config_d.get("tools", [])
+        ),
+    )
+    metrics_d = d["metrics"]
+    metrics = AggregateMetrics(
+        n_conversations_sampled=metrics_d.get("n_conversations_sampled", 0),
+        n_turns_sampled=metrics_d.get("n_turns_sampled", 0),
+        channels_seen=tuple(metrics_d.get("channels_seen", [])),
+        tool_call_count=metrics_d.get("tool_call_count", 0),
+        tool_error_count=metrics_d.get("tool_error_count", 0),
+        specific_claim_turns=metrics_d.get("specific_claim_turns", 0),
+        specific_claim_turns_without_kb=metrics_d.get("specific_claim_turns_without_kb", 0),
+        escalation_tool_call_count=metrics_d.get("escalation_tool_call_count", 0),
+        conversations_with_escalation=metrics_d.get("conversations_with_escalation", 0),
+        repeated_question_conversations=metrics_d.get("repeated_question_conversations", 0),
+        agent_turns_sampled=metrics_d.get("agent_turns_sampled", 0),
+        negative_sentiment_turns=metrics_d.get("negative_sentiment_turns", 0),
+        turns_with_latency_data=metrics_d.get("turns_with_latency_data", 0),
+        turns_over_latency_band=metrics_d.get("turns_over_latency_band", 0),
+    )
+    conversations = tuple(
+        ConversationRecord(
+            conversation_id=c["conversation_id"],
+            channel=c["channel"],
+            turns=tuple(
+                ConversationTurn(
+                    role=t["role"],
+                    text=t["text"],
+                    used_static_kb_document_ids=tuple(t.get("used_static_kb_document_ids", [])),
+                    tool_calls=tuple(ToolCallRecord(tool_name=tc["tool_name"], is_error=tc["is_error"]) for tc in t.get("tool_calls", [])),
+                    ttfb_ms=t.get("ttfb_ms"),
+                )
+                for t in c.get("turns", [])
+            ),
+        )
+        for c in d.get("conversations", [])
+    )
+    return AgentSnapshot(
+        agent_id=d["agent_id"],
+        name=d["name"],
+        config=config,
+        metrics=metrics,
+        conversations=conversations,
+        arr_usd=d.get("arr_usd"),
+        is_synthetic=d.get("is_synthetic", False),
+        synthetic_note=d.get("synthetic_note"),
+    )

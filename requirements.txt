@@ -1,0 +1,7 @@
+# Runtime deps. Only `requests` and `anthropic` touch the network, and only
+# when you actually use --backend live / fetch-portfolio (see README).
+requests>=2.31
+anthropic>=0.40
+
+# Dev/eval only.
+pytest>=8.0

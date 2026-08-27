@@ -124,6 +124,21 @@ def _gaps_for(judgement: Judgement) -> tuple[RecipeGap, ...]:
     )
 
 
+def route_unflagged(agent_id: str, arr_usd: float | None) -> RoutingDecision:
+    """Routing for an agent the cheap pass did not flag — the judge was
+    never invoked, so this is NOT the same claim as judge-confirmed
+    "healthy". classification="not_flagged" keeps that distinction visible
+    to the eval harness, which needs it to measure cheap-pass recall
+    honestly: a "not_flagged" agent that turns out to be broken is a
+    cheap-pass false negative, not a judge mistake.
+    """
+    return RoutingDecision(
+        agent_id=agent_id, classification="not_flagged", arr_tier=_arr_tier(arr_usd),
+        action=RouteAction.NO_ACTION, requires_human_approval=False,
+        detail="Cheap pass did not flag this agent; judge tier was not invoked.",
+    )
+
+
 def route(judgement: Judgement, arr_usd: float | None) -> RoutingDecision:
     tier = _arr_tier(arr_usd)
 
