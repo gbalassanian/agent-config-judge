@@ -71,7 +71,13 @@ class AggregateMetrics:
 
     # Grounding proxy: turns where the agent made a specific factual claim
     # (number/price/policy/format — see elevenlabs_client's regex) and
-    # whether that turn had any used_static_kb_document_ids.
+    # whether that claim is attributable — to a used_static_kb_document_id,
+    # an adjacent tool call, or a number the user supplied a few turns
+    # earlier. The field name predates the second and third sources (added
+    # after finding real false-positive cases — a tool-grounded answer with
+    # no KB doc, and an echoed user-supplied order number) and is kept for
+    # compatibility; read it as "without an attributable source", not
+    # literally "without a KB doc".
     specific_claim_turns: int = 0
     specific_claim_turns_without_kb: int = 0
 
