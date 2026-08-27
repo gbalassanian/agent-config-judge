@@ -275,6 +275,30 @@ _FRUSTRATION_RE = re.compile(
     re.IGNORECASE,
 )
 
+# How many turns back to look when checking whether a specific-looking
+# claim just echoes a number the USER supplied earlier, rather than an
+# unattributed fact the agent invented. This is a number-token comparison,
+# not semantic reading — the same mechanical class of check as the repeat
+# detector below, just applied to a different criterion.
+_USER_ECHO_LOOKBACK_TURNS = 4
+
+# A number as it appears in running text: digits, optionally with internal
+# commas/periods as thousand or decimal separators (so "1,200" parses as
+# one token). Deliberately NOT the whole-turn digit concatenation this
+# module used at first — concatenating every digit in a turn into one
+# string would let two unrelated numbers ("3pm" and "turn 5") collide into
+# a false "35" match. Comparing distinct tokens for exact equality avoids
+# that without needing an arbitrary minimum-length guard.
+_NUMBER_TOKEN_RE = re.compile(r"\d(?:[\d,.]*\d)?")
+
+
+def _digits_only(s: str) -> str:
+    return re.sub(r"\D", "", s)
+
+
+def _number_tokens(s: str) -> set[str]:
+    return {_digits_only(tok) for tok in _NUMBER_TOKEN_RE.findall(s)}
+
 
 def parse_conversation(raw_conv: dict[str, Any]) -> ConversationRecord:
     """Build a ConversationRecord from a raw GET /conversations/{id} response."""
@@ -350,7 +374,7 @@ def compute_aggregate_metrics(conversations: list[ConversationRecord]) -> Aggreg
         conv_escalated = False
         seen_user_texts: list[str] = []
 
-        for turn in conv.turns:
+        for i, turn in enumerate(conv.turns):
             for tc in turn.tool_calls:
                 tool_call_count += 1
                 if tc.is_error:
@@ -361,10 +385,41 @@ def compute_aggregate_metrics(conversations: list[ConversationRecord]) -> Aggreg
 
             if turn.role == "agent":
                 agent_turns_sampled += 1
-                if turn.text and _SPECIFIC_CLAIM_RE.search(turn.text):
-                    specific_claim_turns += 1
-                    if not turn.used_static_kb_document_ids:
-                        specific_claim_turns_without_kb += 1
+                if turn.text:
+                    match = _SPECIFIC_CLAIM_RE.search(turn.text)
+                    if match:
+                        specific_claim_turns += 1
+                        # Attributable if any of three sources back it — KB,
+                        # an adjacent tool call, or the user's own words.
+                        # Despite the field's name (kept for compatibility;
+                        # see models.py's docstring), "without_kb" now means
+                        # "without ANY attributable source", not literally
+                        # "without a KB doc" — the other two sources were
+                        # added after finding real false-positive cases
+                        # (Operations Copilot's tool-grounded answers; the
+                        # user-supplied-order-number golden-set trap).
+                        attributable = bool(turn.used_static_kb_document_ids)
+
+                        if not attributable and (
+                            turn.tool_calls or (i > 0 and conv.turns[i - 1].tool_calls)
+                        ):
+                            # A tool round is often split across two
+                            # consecutive turns (see _merge_tool_rounds),
+                            # so the call can sit one turn back from the
+                            # turn that states the result in words.
+                            attributable = True
+
+                        if not attributable:
+                            claim_numbers = _number_tokens(match.group(0))
+                            if claim_numbers:
+                                window_start = max(0, i - _USER_ECHO_LOOKBACK_TURNS)
+                                for prior in conv.turns[window_start:i]:
+                                    if prior.role == "user" and claim_numbers & _number_tokens(prior.text):
+                                        attributable = True
+                                        break
+
+                        if not attributable:
+                            specific_claim_turns_without_kb += 1
                 if turn.text and _ESCALATION_PHRASE_RE.search(turn.text):
                     conv_escalated = True
                 if turn.ttfb_ms is not None:

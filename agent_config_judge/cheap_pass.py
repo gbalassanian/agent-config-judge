@@ -242,9 +242,10 @@ def _score_grounding(metrics: AggregateMetrics) -> CriterionScore:
     return CriterionScore(
         "grounding", verdict, score,
         f"{metrics.specific_claim_turns_without_kb}/{metrics.specific_claim_turns} "
-        f"specific-claim turns had no KB doc used ({rate:.0%}). NOTE: this is a proxy — "
-        "a claim can be unsourced because the user supplied the number themselves; "
-        "see golden set false-positive trap.",
+        f"specific-claim turns had no attributable source ({rate:.0%}) — no KB doc used, "
+        "no adjacent tool call, and the claim wasn't an echo of something the user just "
+        "said. NOTE: still a proxy — attribution is per TURN, not per individual claim, "
+        "so a turn mixing one grounded and one fabricated claim reads as fine either way.",
     )
 
 
