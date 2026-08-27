@@ -308,6 +308,24 @@ _RECIPES: list[Recipe] = [
         tier=RecipeTier.NUDGE,
     ),
     Recipe(
+        cause_code="multi_turn_repeats_failed_tool_call",
+        criterion_id="multi_turn",
+        # Found live: an agent hit a webhook 401, retried the identical
+        # query verbatim, got the identical 401, then gave up — a loop on
+        # an edge case per the rubric's own definition, distinct from
+        # re-asking the user a question. Generalizable enough to be
+        # self-serve rather than account-specific.
+        title="Retries an identical tool call after it already failed",
+        fix=(
+            "Add an explicit prompt instruction: on a tool error, either "
+            "change something about the retry (different query, different "
+            "tool) or tell the user plainly that something failed — never "
+            "repeat the exact same call and expect a different result."
+        ),
+        tier=RecipeTier.SELF_SERVE,
+        doc_url="https://elevenlabs.io/docs/conversational-ai/customization/tools",
+    ),
+    Recipe(
         cause_code="escalation_rate_zero_with_missed_cases",
         criterion_id="escalation_health",
         title="Never escalates despite clear-cut cases that needed a human",
