@@ -43,6 +43,24 @@ MIN_SYSTEM_PROMPT_CHARS = 40
 # purpose (see module docstring: over-flag, don't under-flag).
 FLAG_SCORE_THRESHOLD = 85
 
+# Criteria excluded from the composite average that FLAG_SCORE_THRESHOLD is
+# compared against — not a weighting choice, a structural one. "fallback"
+# has no mechanical proxy at all (see _score_fallback) and never will: it
+# always reports unknown, for every agent, regardless of sample size. Since
+# "unknown" scores worse than "pass" by design (asymmetric-cost brief, see
+# module docstring), leaving it in the average would tax every single agent
+# a fixed ~(100-40)/9 points forever, for a criterion the cheap pass can
+# never resolve either way — that's not signal about the agent, it's a
+# constant. Confirmed empirically before this was added: a hand-built
+# healthy demo agent that passed every checkable criterion still scored
+# 83.5 (< the 85 threshold) purely from this tax plus one other
+# always/often-unknown criterion; excluding fallback from the average
+# raised it to 88.9 with zero change to golden-set recall/precision.
+# fallback's own CriterionScore is still computed and returned unchanged —
+# still shown as unknown, still sent to the judge — it just doesn't count
+# toward the number that decides whether to flag.
+_EXCLUDED_FROM_COMPOSITE_SCORE = frozenset({"fallback"})
+
 # score assigned per criterion verdict before weighting; "unknown" scores
 # worse than "pass" but not as bad as a confirmed "fail" — see module doc.
 class Verdict(str, Enum):
@@ -373,11 +391,14 @@ def score_agent(config: AgentConfigSnapshot, metrics: AggregateMetrics) -> Cheap
     }
     criterion_scores = tuple(scorers[cid]() for cid in CRITERION_ORDER)
 
-    # Equal weighting across all nine criteria — a placeholder simplification.
-    # Weighting config-checkable criteria higher (they're more reliable) is
-    # an obvious next calibration step; not done here because it needs a
-    # labeled portfolio to justify specific weights rather than a guess.
-    overall = sum(c.score for c in criterion_scores) / len(criterion_scores)
+    # Equal weighting across the composite-eligible criteria — a placeholder
+    # simplification. Weighting config-checkable criteria higher (they're
+    # more reliable) is an obvious next calibration step; not done here
+    # because it needs a labeled portfolio to justify specific weights
+    # rather than a guess. See _EXCLUDED_FROM_COMPOSITE_SCORE for the one
+    # criterion left out of this average entirely, not just weighted down.
+    composite_scores = [c.score for c in criterion_scores if c.criterion_id not in _EXCLUDED_FROM_COMPOSITE_SCORE]
+    overall = sum(composite_scores) / len(composite_scores)
 
     forced = should_force_flag(metrics)
     reasons: list[str] = []

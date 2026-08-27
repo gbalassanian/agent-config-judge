@@ -135,7 +135,7 @@ counting/regex/exact-match over data ElevenLabs already returns).
 | `system_prompt` | Whether the agent has a prompt substantial enough to express a bounded role | Character length of `config.system_prompt`, stripped, against a fixed floor (40 chars) | FAIL if under the floor; PASS if at or above it. Never UNKNOWN — the field is always readable | A `len()` check on a config field already in the API response |
 | `knowledge_base` | Whether the agent has at least one connected knowledge source | Count of `config.knowledge_base_ids` | UNKNOWN if zero (config alone can't say the job needs one); PASS if one or more. Never FAIL — absence isn't proof of a problem | Counting an array already in the config |
 | `human_handoff` | Whether a human-transfer path exists **and works on the channels this agent actually runs on** | `transfer_to_agent`/`transfer_to_number` tool presence, cross-checked against `channels_seen` (from `metadata.conversation_initiation_source`) against a fixed phone-only channel set | FAIL if no transfer tool at all, or `transfer_to_number` configured but a non-telephony channel was observed; PASS if `transfer_to_agent` exists (channel-independent) or `transfer_to_number` and every observed channel is telephony; UNKNOWN if `transfer_to_number` exists but no channel data was sampled | Tool-type presence plus exact set-membership against a fixed list — structured metadata, no transcript text read |
-| `fallback` | Whether the agent admits uncertainty *before* escalating, in that order | No mechanical proxy exists — sequencing/causality across turns can't be checked without reading | Always UNKNOWN at this tier | Honesty about a gap, not a cheap approximation of it — declaring "can't tell" costs nothing and doesn't risk a confidently wrong heuristic |
+| `fallback` | Whether the agent admits uncertainty *before* escalating, in that order | No mechanical proxy exists — sequencing/causality across turns can't be checked without reading | Always UNKNOWN at this tier — the only criterion excluded from the composite score's average (see below), since it can never resolve either way regardless of sample size and would otherwise tax every agent's score by a fixed amount forever | Honesty about a gap, not a cheap approximation of it — declaring "can't tell" costs nothing and doesn't risk a confidently wrong heuristic |
 | `grounding` | Whether specific factual claims (numbers, prices, policies) are attributable rather than invented | Regex flags a specific-looking claim; it counts as attributable if backed by a used KB doc id, an adjacent tool call (same or prior turn), or a number token the user supplied within the last 4 turns (exact set intersection). Rate = unattributed / total specific-claim turns, FAIL at ≥50% | UNKNOWN if no specific-claim turns observed; FAIL at ≥50% unattributed; PASS otherwise (score scaled by the rate) | Regex match plus set-intersection/presence checks against fields already on the turn object (KB doc ids, tool calls, prior turn text) — no interpretation of what the claim means |
 | `multi_turn` | Whether the agent makes the user repeat themselves | Exact (normalized: stripped, lowercased) string match of a user turn against every earlier user turn in the same conversation. Rate = conversations with a repeat / conversations sampled, FAIL above 20% | UNKNOWN if no conversations sampled; FAIL above 20%; PASS otherwise | Exact string equality, no fuzzy matching — deliberately blind to the more common paraphrased re-ask, which would need understanding, not comparison |
 | `escalation_health` | Whether escalation to a human happens at a healthy rate — not never, not constantly | Tool-name match (`transfer_to_number`/`transfer_to_agent`) OR a fixed escalation-phrase regex, either counts a conversation as escalated. Rate = escalated / conversations sampled | UNKNOWN if no conversations sampled; FAIL at exactly 0% (floor) or above 60% (ceiling); PASS in between | Tool-name match plus phrase-presence regex — pattern detection, not judgment of whether the escalation was warranted |
@@ -150,6 +150,17 @@ All thresholds in this table (40 chars, 50%, 20%, 60%, 25%, 30%, the latency
 bands) are placeholders, not tuned cutoffs — see "Eval results" for where
 they land on the golden set today, and the module docstring in
 `cheap_pass.py` for the over-flag-on-purpose rationale.
+
+The overall score compared against `FLAG_SCORE_THRESHOLD` is an unweighted
+average of eight criteria, not nine: `fallback` is excluded entirely, not
+just weighted down, because it can never resolve to pass or fail at this
+tier regardless of sample size (see the table row above) — leaving it in
+the average would tax every agent's score by a fixed amount forever for a
+criterion the cheap pass structurally cannot answer either way. This was
+found live: a hand-built, fully-passing demo agent still scored 83.5 (below
+the 85 threshold) purely from this tax stacked with one other frequently-
+unknown criterion; excluding `fallback` raised it to 88.9 with zero change
+to golden-set recall/precision.
 
 ### The recipe catalog is the standard/systemic frontier
 
