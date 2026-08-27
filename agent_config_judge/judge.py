@@ -329,7 +329,13 @@ class Judgement:
         return [c for c in self.criteria.values() if c.is_unmapped_failure]
 
 
-def _validate_one_criterion(criterion_id: str, raw: Any, validator_notes: list[str]) -> CriterionVerdict:
+def _normalize_for_match(s: str) -> str:
+    return re.sub(r"\s+", " ", s).strip().lower()
+
+
+def _validate_one_criterion(
+    criterion_id: str, raw: Any, validator_notes: list[str], transcript_text: str | None
+) -> CriterionVerdict:
     if not isinstance(raw, dict):
         validator_notes.append(f"{criterion_id}: judge output missing or malformed; scored unknown.")
         return CriterionVerdict(criterion_id, "unknown", "unknown", None, None, None, None)
@@ -347,14 +353,28 @@ def _validate_one_criterion(criterion_id: str, raw: Any, validator_notes: list[s
         )
         quote = quote[:MAX_QUOTE_CHARS]
 
+    # Evidence is enforced, not just requested: a quote has to actually
+    # appear in the transcript sample the judge was given, not merely be
+    # present as a string. This is what stops a judge from citing a
+    # plausible-sounding but fabricated line. transcript_text is None only
+    # when the caller has no transcript to check against (shouldn't happen
+    # via run_judge, which always passes it); in that case the check is
+    # skipped rather than failing everything.
+    if quote and transcript_text is not None and _normalize_for_match(quote) not in transcript_text:
+        validator_notes.append(
+            f"{criterion_id}: evidence_quote {quote!r} does not appear verbatim in the transcript "
+            "sample provided; discarded as fabricated evidence."
+        )
+        quote = None
+
     config_field = raw.get("evidence_config_field")
     config_field = config_field.strip() if isinstance(config_field, str) and config_field.strip() else None
 
     verdict = raw_verdict
     if verdict in ("pass", "fail") and not quote and not config_field:
         validator_notes.append(
-            f"{criterion_id}: verdict {verdict!r} arrived with no evidence quote or config field; "
-            "downgraded to unknown — an unevidenced verdict is not trusted."
+            f"{criterion_id}: verdict {verdict!r} arrived with no evidence quote or config field "
+            "that survived verification; downgraded to unknown — an unevidenced verdict is not trusted."
         )
         verdict = "unknown"
 
@@ -395,20 +415,36 @@ def _validate_one_criterion(criterion_id: str, raw: Any, validator_notes: list[s
     )
 
 
-def validate_judge_output(raw: dict[str, Any], agent_id: str) -> Judgement:
+def validate_judge_output(
+    raw: dict[str, Any],
+    agent_id: str,
+    conversations: tuple[ConversationRecord, ...] | None = None,
+) -> Judgement:
     """The one function that turns an untrusted judge dict into a routable Judgement.
 
     Recomputes classification from the recipe mapping every time — never
     reads a "classification" field even if the raw output includes one.
+
+    Passing `conversations` enables the verbatim-quote check (see
+    _validate_one_criterion): every evidence_quote must actually occur in
+    that transcript sample or it's discarded. Omit it only for validating
+    hand-constructed test payloads that have no real transcript behind
+    them; run_judge always supplies it.
     """
     validator_notes: list[str] = []
     raw_criteria = raw.get("criteria", {}) if isinstance(raw, dict) else {}
     if not isinstance(raw_criteria, dict):
         raw_criteria = {}
 
+    transcript_text: str | None = None
+    if conversations is not None:
+        transcript_text = _normalize_for_match(
+            " ".join(turn.text for conv in conversations for turn in conv.turns if turn.text)
+        )
+
     criteria: dict[str, CriterionVerdict] = {}
     for cid in CRITERION_ORDER:
-        criteria[cid] = _validate_one_criterion(cid, raw_criteria.get(cid), validator_notes)
+        criteria[cid] = _validate_one_criterion(cid, raw_criteria.get(cid), validator_notes, transcript_text)
 
     failures = [c for c in criteria.values() if c.verdict == "fail"]
     if not failures:
@@ -448,4 +484,4 @@ def run_judge(
         raise
     if not isinstance(raw, dict):
         raise JudgeError(f"Judge backend for {config.agent_id!r} returned non-dict output: {type(raw)!r}")
-    return validate_judge_output(raw, agent_id=config.agent_id)
+    return validate_judge_output(raw, agent_id=config.agent_id, conversations=conversations)
