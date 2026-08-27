@@ -47,6 +47,7 @@ from agent_config_judge.models import (
     AggregateMetrics,
     AgentSnapshot,
     ConversationRecord,
+    KnowledgeBaseDocConfig,
     ConversationTurn,
     ToolCallRecord,
     ToolConfig,
@@ -163,6 +164,12 @@ def parse_agent_config(raw_agent: dict[str, Any]) -> AgentConfigSnapshot:
     kb_ids = tuple(
         doc.get("id", "") for doc in (prompt_block.get("knowledge_base") or []) if doc.get("id")
     )
+    kb_docs = tuple(
+        KnowledgeBaseDocConfig(id=doc.get("id", ""), name=doc.get("name", ""), usage_mode=doc.get("usage_mode"))
+        for doc in (prompt_block.get("knowledge_base") or [])
+        if doc.get("id")
+    )
+    rag_enabled = (prompt_block.get("rag") or {}).get("enabled")
 
     tools: list[ToolConfig] = []
     seen_names: set[str] = set()
@@ -206,6 +213,8 @@ def parse_agent_config(raw_agent: dict[str, Any]) -> AgentConfigSnapshot:
         name=raw_agent.get("name", ""),
         system_prompt=prompt_block.get("prompt", "") or "",
         knowledge_base_ids=kb_ids,
+        knowledge_base_docs=kb_docs,
+        rag_enabled=rag_enabled,
         tools=tuple(tools),
     )
 
@@ -348,10 +357,15 @@ def parse_conversation(raw_conv: dict[str, Any]) -> ConversationRecord:
             )
         )
 
+    overall_sentiment_label = (
+        (raw_conv.get("analysis") or {}).get("sentiment_analysis") or {}
+    ).get("overall_label")
+
     return ConversationRecord(
         conversation_id=raw_conv.get("conversation_id", ""),
         channel=channel,
         turns=tuple(turns),
+        overall_sentiment_label=overall_sentiment_label,
     )
 
 
@@ -378,6 +392,8 @@ def compute_aggregate_metrics(conversations: list[ConversationRecord]) -> Aggreg
     escalation_tool_call_count = 0
     conversations_with_escalation = 0
     repeated_question_conversations = 0
+    conversations_with_sentiment_label = 0
+    conversations_negative_sentiment_label = 0
     agent_turns_sampled = 0
     negative_sentiment_turns = 0
     turns_with_latency_data = 0
@@ -391,6 +407,11 @@ def compute_aggregate_metrics(conversations: list[ConversationRecord]) -> Aggreg
         n_turns += len(conv.turns)
         channels.add(conv.channel)
         band = LATENCY_BAND_MS_BY_CHANNEL.get(conv.channel, DEFAULT_LATENCY_BAND_MS)
+
+        if conv.overall_sentiment_label:
+            conversations_with_sentiment_label += 1
+            if conv.overall_sentiment_label.strip().lower() == "negative":
+                conversations_negative_sentiment_label += 1
 
         conv_escalated = False
         seen_user_texts: list[str] = []
@@ -488,6 +509,8 @@ def compute_aggregate_metrics(conversations: list[ConversationRecord]) -> Aggreg
         escalation_tool_call_count=escalation_tool_call_count,
         conversations_with_escalation=conversations_with_escalation,
         repeated_question_conversations=repeated_question_conversations,
+        conversations_with_sentiment_label=conversations_with_sentiment_label,
+        conversations_negative_sentiment_label=conversations_negative_sentiment_label,
         agent_turns_sampled=agent_turns_sampled,
         negative_sentiment_turns=negative_sentiment_turns,
         turns_with_latency_data=turns_with_latency_data,

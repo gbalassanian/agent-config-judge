@@ -42,12 +42,37 @@ class ToolConfig:
 
 
 @dataclass(frozen=True)
+class KnowledgeBaseDocConfig:
+    """One KB document attached to the agent, config-side only.
+
+    usage_mode is ElevenLabs' own field (e.g. "auto") controlling whether
+    this doc is always injected into the prompt or only pulled in via RAG
+    retrieval at query time. Judge-relevant context for explaining a
+    grounding failure — never read by cheap_pass, which only ever counts
+    knowledge_base_ids (presence/absence), not how a doc is actually used.
+    """
+
+    id: str
+    name: str = ""
+    usage_mode: str | None = None
+
+
+@dataclass(frozen=True)
 class AgentConfigSnapshot:
     agent_id: str
     name: str
     system_prompt: str
     knowledge_base_ids: tuple[str, ...] = ()
     tools: tuple[ToolConfig, ...] = ()
+    # Judge-facing detail beyond the cheap-pass-scored knowledge_base_ids
+    # above: per-doc usage_mode, and conversation_config.agent.prompt.rag.
+    # enabled — whether RAG retrieval is actually on for this agent, as
+    # opposed to a KB attached but always-injected (usage_mode="auto")
+    # with rag never queried. cheap_pass never reads either field; it's
+    # the judge that needs "is a KB attached" (cheap pass's question)
+    # distinguished from "is it actually retrievable/used" (the judge's).
+    knowledge_base_docs: tuple[KnowledgeBaseDocConfig, ...] = ()
+    rag_enabled: bool | None = None
 
     def has_tool_type(self, system_tool_type: str) -> bool:
         return any(t.system_tool_type == system_tool_type for t in self.tools)
@@ -102,10 +127,20 @@ class AggregateMetrics:
     # than a fuzzy one that can be confidently wrong in either direction.
     repeated_question_conversations: int = 0
 
-    # Sentiment proxy: agent turns following a user turn that matched a
+    # Sentiment: two sources, real preferred over heuristic.
+    #
+    # ElevenLabs computes its own per-conversation sentiment judgment
+    # (analysis.sentiment_analysis.overall_label) — a real signal, not a
+    # heuristic, so cheap_pass prefers it when the sample has it.
+    conversations_with_sentiment_label: int = 0
+    conversations_negative_sentiment_label: int = 0
+
+    # Fallback proxy for samples with no real sentiment_analysis data
+    # (synthetic golden-set cases; an older account/version that hasn't
+    # backfilled it): agent turns following a user turn that matched a
     # frustration-keyword heuristic ("this isn't working", "I already told
-    # you", profanity list, etc.) — a coarse stand-in for real sentiment
-    # analysis, flagged as such in cheap_pass.
+    # you", profanity list, etc.) — a coarse stand-in, flagged as such in
+    # cheap_pass.
     agent_turns_sampled: int = 0
     negative_sentiment_turns: int = 0
 
@@ -135,6 +170,11 @@ class ConversationRecord:
     conversation_id: str
     channel: str  # metadata.conversation_initiation_source
     turns: tuple[ConversationTurn, ...] = ()
+    # analysis.sentiment_analysis.overall_label — ElevenLabs' own real
+    # per-conversation sentiment judgment (e.g. "positive"/"neutral"/
+    # "negative"). None when the sample has no analysis block at all
+    # (synthetic cases; an account/version that doesn't compute it).
+    overall_sentiment_label: str | None = None
 
 
 @dataclass(frozen=True)
@@ -184,6 +224,10 @@ def agent_snapshot_to_dict(snap: AgentSnapshot) -> dict:
             "name": snap.config.name,
             "system_prompt": snap.config.system_prompt,
             "knowledge_base_ids": list(snap.config.knowledge_base_ids),
+            "knowledge_base_docs": [
+                {"id": d.id, "name": d.name, "usage_mode": d.usage_mode} for d in snap.config.knowledge_base_docs
+            ],
+            "rag_enabled": snap.config.rag_enabled,
             "tools": [
                 {"name": t.name, "tool_type": t.tool_type, "system_tool_type": t.system_tool_type, "detail": t.detail}
                 for t in snap.config.tools
@@ -200,6 +244,8 @@ def agent_snapshot_to_dict(snap: AgentSnapshot) -> dict:
             "escalation_tool_call_count": snap.metrics.escalation_tool_call_count,
             "conversations_with_escalation": snap.metrics.conversations_with_escalation,
             "repeated_question_conversations": snap.metrics.repeated_question_conversations,
+            "conversations_with_sentiment_label": snap.metrics.conversations_with_sentiment_label,
+            "conversations_negative_sentiment_label": snap.metrics.conversations_negative_sentiment_label,
             "agent_turns_sampled": snap.metrics.agent_turns_sampled,
             "negative_sentiment_turns": snap.metrics.negative_sentiment_turns,
             "turns_with_latency_data": snap.metrics.turns_with_latency_data,
@@ -209,6 +255,7 @@ def agent_snapshot_to_dict(snap: AgentSnapshot) -> dict:
             {
                 "conversation_id": c.conversation_id,
                 "channel": c.channel,
+                "overall_sentiment_label": c.overall_sentiment_label,
                 "turns": [
                     {
                         "role": t.role,
@@ -232,6 +279,11 @@ def agent_snapshot_from_dict(d: dict) -> AgentSnapshot:
         name=config_d["name"],
         system_prompt=config_d["system_prompt"],
         knowledge_base_ids=tuple(config_d.get("knowledge_base_ids", [])),
+        knowledge_base_docs=tuple(
+            KnowledgeBaseDocConfig(id=doc["id"], name=doc.get("name", ""), usage_mode=doc.get("usage_mode"))
+            for doc in config_d.get("knowledge_base_docs", [])
+        ),
+        rag_enabled=config_d.get("rag_enabled"),
         tools=tuple(
             ToolConfig(name=t["name"], tool_type=t["tool_type"], system_tool_type=t.get("system_tool_type"), detail=t.get("detail", ""))
             for t in config_d.get("tools", [])
@@ -249,6 +301,8 @@ def agent_snapshot_from_dict(d: dict) -> AgentSnapshot:
         escalation_tool_call_count=metrics_d.get("escalation_tool_call_count", 0),
         conversations_with_escalation=metrics_d.get("conversations_with_escalation", 0),
         repeated_question_conversations=metrics_d.get("repeated_question_conversations", 0),
+        conversations_with_sentiment_label=metrics_d.get("conversations_with_sentiment_label", 0),
+        conversations_negative_sentiment_label=metrics_d.get("conversations_negative_sentiment_label", 0),
         agent_turns_sampled=metrics_d.get("agent_turns_sampled", 0),
         negative_sentiment_turns=metrics_d.get("negative_sentiment_turns", 0),
         turns_with_latency_data=metrics_d.get("turns_with_latency_data", 0),
@@ -258,6 +312,7 @@ def agent_snapshot_from_dict(d: dict) -> AgentSnapshot:
         ConversationRecord(
             conversation_id=c["conversation_id"],
             channel=c["channel"],
+            overall_sentiment_label=c.get("overall_sentiment_label"),
             turns=tuple(
                 ConversationTurn(
                     role=t["role"],

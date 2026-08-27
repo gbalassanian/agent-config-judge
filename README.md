@@ -100,6 +100,8 @@ fixtures/
 scripts/
   build_real_fixture.py            provenance: how the real fixture was built from raw API shapes
   produce_recorded_judgements.py    provenance: how the recorded judgements were produced
+  calibrate_latency_bands.py        reports observed TTFB percentiles per channel from a snapshot;
+                                     never auto-applies them (see "Limitations")
 tests/                            26 tests on the load-bearing contract rules (see "Running the tests")
 ```
 
@@ -137,7 +139,7 @@ counting/regex/exact-match over data ElevenLabs already returns).
 | `grounding` | Whether specific factual claims (numbers, prices, policies) are attributable rather than invented | Regex flags a specific-looking claim; it counts as attributable if backed by a used KB doc id, an adjacent tool call (same or prior turn), or a number token the user supplied within the last 4 turns (exact set intersection). Rate = unattributed / total specific-claim turns, FAIL at ≥50% | UNKNOWN if no specific-claim turns observed; FAIL at ≥50% unattributed; PASS otherwise (score scaled by the rate) | Regex match plus set-intersection/presence checks against fields already on the turn object (KB doc ids, tool calls, prior turn text) — no interpretation of what the claim means |
 | `multi_turn` | Whether the agent makes the user repeat themselves | Exact (normalized: stripped, lowercased) string match of a user turn against every earlier user turn in the same conversation. Rate = conversations with a repeat / conversations sampled, FAIL above 20% | UNKNOWN if no conversations sampled; FAIL above 20%; PASS otherwise | Exact string equality, no fuzzy matching — deliberately blind to the more common paraphrased re-ask, which would need understanding, not comparison |
 | `escalation_health` | Whether escalation to a human happens at a healthy rate — not never, not constantly | Tool-name match (`transfer_to_number`/`transfer_to_agent`) OR a fixed escalation-phrase regex, either counts a conversation as escalated. Rate = escalated / conversations sampled | UNKNOWN if no conversations sampled; FAIL at exactly 0% (floor) or above 60% (ceiling); PASS in between | Tool-name match plus phrase-presence regex — pattern detection, not judgment of whether the escalation was warranted |
-| `sentiment` | Whether the agent leaves users frustrated | An agent turn counts as negative-sentiment when the immediately preceding user turn matches a fixed frustration-keyword regex (EN/ES). Rate = negative-sentiment agent turns / agent turns sampled, FAIL above 25% | UNKNOWN if no agent turns sampled; FAIL above 25%; PASS otherwise | Keyword regex against the previous turn's text plus a turn-index adjacency check — no cause attribution, no real sentiment model |
+| `sentiment` | Whether the agent leaves users frustrated | Two sources, real preferred: if the sample has ElevenLabs' own `analysis.sentiment_analysis.overall_label` per conversation, rate = conversations labeled negative / conversations with a label (FAIL above 25%). Otherwise falls back to the keyword proxy: an agent turn counts as negative-sentiment when the immediately preceding user turn matches a fixed frustration-keyword regex (EN/ES); rate = negative-sentiment agent turns / agent turns sampled (FAIL above 25%) | UNKNOWN if neither source has data; FAIL above 25% on whichever source is used; PASS otherwise | Real-label path: an equality check against ElevenLabs' own computed label, not a heuristic. Fallback path: keyword regex against the previous turn's text plus a turn-index adjacency check. Neither attributes cause — no real sentiment model built here either way |
 | `latency` | Whether the agent responds fast enough for its channel | Real per-turn TTFB (`conversation_turn_metrics.metrics.convai_llm_service_ttfb`) compared to a fixed per-channel band (placeholder ms values). Rate = turns over band / turns with latency data, FAIL above 30% | UNKNOWN if no TTFB data in the sample; FAIL above 30%; PASS otherwise | Numeric comparison of a real telemetry field ElevenLabs already returns against a fixed constant — arithmetic, not reading |
 
 Every row above shares the same structural guarantee: `score_agent()`'s type
@@ -329,6 +331,63 @@ of 16 correctly-identified mapped failures, cause_code matched ground truth in 1
   metrics and re-reading the transcript rather than trusting the label I'd
   already written.
 
+## Path to scale
+
+Everything above runs against one workspace, on demand, with one API key
+typed into `.env`. Running this from inside ElevenLabs — one scan across
+every customer workspace, on a schedule — changes five things, in order of
+how much they'd actually cost to build:
+
+1. **Access is the real blocker, not detection.** ElevenLabs' Agents API is
+   workspace-scoped: a workspace's API key sees only that workspace's
+   agents and conversations, including customer system prompts (which are
+   the customer's private content, not ElevenLabs'). There is no
+   "read every customer's agents" superuser key. Three ways to get access,
+   none of them this repo's problem to solve, all of them requiring the
+   customer's consent: (a) the customer invites an ElevenLabs account into
+   their workspace, (b) the customer shares a scoped API key, or (c) the
+   customer runs this tool themselves and shares the *output* (a
+   `CheapPassResult`/judge classification), never the raw key or transcripts.
+   Whatever this becomes at scale, it's opt-in per workspace by
+   construction — the alternative doesn't exist in the API surface.
+2. **Fetching goes from sync to async.** `ElevenLabsClient` today makes
+   blocking `requests` calls in a loop — fine for one workspace's handful
+   of agents, not for hundreds of workspaces in parallel. An async HTTP
+   client (`httpx.AsyncClient` or similar) with a per-workspace concurrency
+   cap turns "N workspaces sequentially" into "N workspaces concurrently,"
+   which is the difference between a scan taking hours and minutes.
+3. **Judge calls batch instead of firing one at a time.** `judge.py`'s
+   `LiveJudgeBackend` calls the Anthropic API per agent. At real volume,
+   most of those calls aren't time-sensitive (a nightly or weekly scan, not
+   a live user waiting) — Anthropic's Message Batches API accepts up to
+   10,000 requests in one submission at a meaningfully lower per-token
+   cost, and the judge's prompt/response contract (`build_judge_prompt`,
+   `validate_judge_output`) doesn't change at all; only the backend that
+   fires the request does.
+4. **Re-scanning should be incremental, not full, every time.** Nothing
+   here needs re-scoring if neither the agent's config nor its
+   conversation sample changed since the last run. A hash of
+   (`system_prompt`, `tools`, `knowledge_base_ids`) plus the newest
+   `conversation_id` seen turns "re-run the whole pipeline on a schedule"
+   into "re-run only on agents that actually changed" — the same
+   cheap-pass-before-judge cost asymmetry this repo already leans on,
+   applied across time instead of across criteria.
+5. **Multi-tenant means real isolation, not just a loop over workspaces.**
+   Each workspace's API key is a secret belonging to that customer and
+   must be stored/rotated per-tenant (a secrets manager, not a shared
+   `.env`); one workspace's fetch failure, rate limit, or malformed
+   response must never block or crash another's job; and usage/cost
+   accounting needs to be per-customer from day one, both for the
+   ElevenLabs API calls and the judge's LLM spend, since "one big shared
+   bill" stops being answerable to "did customer X's scan cost more than
+   customer Y's" the moment there's more than a handful of tenants.
+
+None of this changes what's scored or how — the rubric, cheap pass, judge
+contract, and router are exactly as scale-agnostic as a per-agent decision
+function should be. What changes is everything *around* calling that
+function: how many times, how often, whose secret authorizes it, and
+whether failure in one place can take down the rest.
+
 ## Limitations, weakest first
 
 1. **The eval numbers above are not independent validation** (see "Eval
@@ -350,6 +409,14 @@ of 16 correctly-identified mapped failures, cause_code matched ground truth in 1
    ceiling check. None of these have been tuned against a real labeled
    portfolio at scale; `ARR_HIGH_THRESHOLD_USD` in particular is a guess
    with no input from anyone who owns real account economics.
+   `LATENCY_BAND_MS_BY_CHANNEL` specifically has a calibration script
+   (`scripts/calibrate_latency_bands.py`) that reports observed TTFB
+   percentiles per channel from a snapshot and deliberately refuses to
+   suggest a number below 30 samples for a channel — run against
+   `fixtures/real_portfolio_snapshot.json` today, every channel reports
+   "insufficient data" (that fixture carries no TTFB rows at all), which is
+   the honest state of calibration right now: the mechanism exists, the
+   volume to use it doesn't yet.
 4. **The cheap pass's channel/tool cross-check for `human_handoff` is a
    partial heuristic, not a guarantee** — it only catches a
    `transfer_to_number`/channel mismatch when the sample happens to include

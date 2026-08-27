@@ -89,8 +89,15 @@ ESCALATION_RATE_CEILING = 0.6  # escalating most conversations looks like a brok
 # Multi-turn: repeat-detector rate above this fails.
 REPEAT_QUESTION_FAIL_RATE = 0.2
 
-# Sentiment: negative-turn rate above this fails.
+# Sentiment: negative-turn rate above this fails (fallback keyword proxy).
 NEGATIVE_SENTIMENT_FAIL_RATE = 0.25
+
+# Sentiment: negative-labeled-conversation rate above this fails, when the
+# sample has ElevenLabs' own real sentiment_analysis.overall_label — a
+# separate constant from the fallback above because the two rates are
+# over different populations (conversations vs. agent turns), not because
+# the "acceptable" fraction is believed to differ.
+NEGATIVE_SENTIMENT_LABEL_FAIL_RATE = 0.25
 
 # Latency: over-band rate above this fails.
 LATENCY_OVER_BAND_FAIL_RATE = 0.3
@@ -292,6 +299,23 @@ def _score_escalation_health(metrics: AggregateMetrics) -> CriterionScore:
 
 
 def _score_sentiment(metrics: AggregateMetrics) -> CriterionScore:
+    # Prefer ElevenLabs' own real sentiment_analysis.overall_label when the
+    # sample has it — a real per-conversation judgment ElevenLabs computed,
+    # not a heuristic. Fall back to the frustration-keyword proxy only for
+    # samples with no real label at all (synthetic golden-set cases; an
+    # older account/version that hasn't backfilled it).
+    if metrics.conversations_with_sentiment_label > 0:
+        label_rate = _rate(metrics.conversations_negative_sentiment_label, metrics.conversations_with_sentiment_label)
+        verdict = Verdict.FAIL if label_rate > NEGATIVE_SENTIMENT_LABEL_FAIL_RATE else Verdict.PASS
+        score = _VERDICT_SCORE[verdict] if verdict == Verdict.FAIL else max(0.0, 100.0 * (1 - label_rate))
+        return CriterionScore(
+            "sentiment", verdict, score,
+            f"{metrics.conversations_negative_sentiment_label}/{metrics.conversations_with_sentiment_label} "
+            f"sampled conversations ElevenLabs' own sentiment analysis labeled negative ({label_rate:.0%}). "
+            "Real signal (analysis.sentiment_analysis.overall_label), not a keyword heuristic — still can't "
+            "attribute cause; judge tier decides whether the agent caused it.",
+        )
+
     rate = _rate(metrics.negative_sentiment_turns, metrics.agent_turns_sampled)
     if rate is None:
         return CriterionScore("sentiment", Verdict.UNKNOWN, _VERDICT_SCORE[Verdict.UNKNOWN], "No agent turns sampled.")
@@ -300,7 +324,8 @@ def _score_sentiment(metrics: AggregateMetrics) -> CriterionScore:
     return CriterionScore(
         "sentiment", verdict, score,
         f"{metrics.negative_sentiment_turns}/{metrics.agent_turns_sampled} agent turns follow a "
-        f"frustration-keyword match ({rate:.0%}). NOTE: keyword heuristic can't attribute cause — "
+        f"frustration-keyword match ({rate:.0%}) — no real sentiment_analysis data in this sample, "
+        "falling back to the keyword proxy. NOTE: keyword heuristic can't attribute cause — "
         "a user already angry about something unrelated will also trip this; judge tier decides "
         "whether the agent caused it.",
     )

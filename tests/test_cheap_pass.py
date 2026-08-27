@@ -66,3 +66,27 @@ def test_fallback_always_reports_unknown_never_fabricates_a_proxy():
     metrics = AggregateMetrics(n_conversations_sampled=10)
     result = score_agent(config, metrics)
     assert result.criterion("fallback").verdict.value == "unknown"
+
+
+def test_sentiment_prefers_real_label_over_keyword_proxy():
+    """When the sample has ElevenLabs' own sentiment_analysis label, use it
+    instead of the frustration-keyword fallback, even if the keyword counts
+    alone would have passed."""
+    config = _config()
+    metrics = AggregateMetrics(
+        conversations_with_sentiment_label=4,
+        conversations_negative_sentiment_label=2,  # 50% > fail rate
+        agent_turns_sampled=10,
+        negative_sentiment_turns=0,  # keyword proxy alone would pass
+    )
+    result = score_agent(config, metrics)
+    assert result.criterion("sentiment").verdict.value == "fail"
+    assert "sentiment_analysis" in result.criterion("sentiment").detail
+
+
+def test_sentiment_falls_back_to_keyword_proxy_with_no_real_label_data():
+    config = _config()
+    metrics = AggregateMetrics(agent_turns_sampled=10, negative_sentiment_turns=5)  # 50% > fail rate
+    result = score_agent(config, metrics)
+    assert result.criterion("sentiment").verdict.value == "fail"
+    assert "falling back to the keyword proxy" in result.criterion("sentiment").detail

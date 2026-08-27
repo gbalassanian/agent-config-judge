@@ -66,6 +66,8 @@ def _format_config(config: AgentConfigSnapshot) -> str:
         f"name: {config.name}",
         f"system_prompt: {config.system_prompt!r}",
         f"knowledge_base_ids: {list(config.knowledge_base_ids)}",
+        f"knowledge_base_usage_modes: {[d.usage_mode for d in config.knowledge_base_docs]}",
+        f"rag_enabled: {config.rag_enabled}",
         "tools:",
     ]
     if not config.tools:
