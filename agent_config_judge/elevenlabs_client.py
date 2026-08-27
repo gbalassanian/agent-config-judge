@@ -422,6 +422,21 @@ def compute_aggregate_metrics(conversations: list[ConversationRecord]) -> Aggreg
                             specific_claim_turns_without_kb += 1
                 if turn.text and _ESCALATION_PHRASE_RE.search(turn.text):
                     conv_escalated = True
+                if (
+                    i > 0
+                    and conv.turns[i - 1].role == "user"
+                    and conv.turns[i - 1].text
+                    and _FRUSTRATION_RE.search(conv.turns[i - 1].text)
+                ):
+                    # Counts the agent turn, not the user turn that
+                    # triggered the match, so the rate below divides two
+                    # counts of the same population (agent turns) instead
+                    # of user-turn matches over agent-turn totals — the
+                    # original version of this check counted the user
+                    # turn itself, which could push the "rate" over 100%
+                    # whenever a conversation had more frustrated user
+                    # turns than agent turns.
+                    negative_sentiment_turns += 1
                 if turn.ttfb_ms is not None:
                     turns_with_latency_data += 1
                     if turn.ttfb_ms > band:
@@ -437,8 +452,6 @@ def compute_aggregate_metrics(conversations: list[ConversationRecord]) -> Aggreg
                     seen_user_texts = []  # count each conversation at most once
                 else:
                     seen_user_texts.append(normalized)
-                if _FRUSTRATION_RE.search(turn.text):
-                    negative_sentiment_turns += 1
 
         if conv_escalated:
             conversations_with_escalation += 1
