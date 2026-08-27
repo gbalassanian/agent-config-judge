@@ -121,6 +121,34 @@ above).
 | `sentiment` | behavior | No frustration *caused by the agent* — a user angry about something unrelated isn't a failure |
 | `latency` | behavior | Within band for the channel; slow turns get a shared-cause note when one exists |
 
+### Cheap pass, criterion by criterion: what, how, and why it's cheap
+
+The table above says *what* each criterion checks. This one says exactly
+*how* — what field or count it reads, what makes it PASS/FAIL/UNKNOWN, and
+why that check qualifies as "cheap" (no LLM call, no semantic reading, just
+counting/regex/exact-match over data ElevenLabs already returns).
+
+| Criterion | What it measures | How it's measured | PASS / FAIL / UNKNOWN | Why it's cheap |
+|---|---|---|---|---|
+| `system_prompt` | Whether the agent has a prompt substantial enough to express a bounded role | Character length of `config.system_prompt`, stripped, against a fixed floor (40 chars) | FAIL if under the floor; PASS if at or above it. Never UNKNOWN — the field is always readable | A `len()` check on a config field already in the API response |
+| `knowledge_base` | Whether the agent has at least one connected knowledge source | Count of `config.knowledge_base_ids` | UNKNOWN if zero (config alone can't say the job needs one); PASS if one or more. Never FAIL — absence isn't proof of a problem | Counting an array already in the config |
+| `human_handoff` | Whether a human-transfer path exists **and works on the channels this agent actually runs on** | `transfer_to_agent`/`transfer_to_number` tool presence, cross-checked against `channels_seen` (from `metadata.conversation_initiation_source`) against a fixed phone-only channel set | FAIL if no transfer tool at all, or `transfer_to_number` configured but a non-telephony channel was observed; PASS if `transfer_to_agent` exists (channel-independent) or `transfer_to_number` and every observed channel is telephony; UNKNOWN if `transfer_to_number` exists but no channel data was sampled | Tool-type presence plus exact set-membership against a fixed list — structured metadata, no transcript text read |
+| `fallback` | Whether the agent admits uncertainty *before* escalating, in that order | No mechanical proxy exists — sequencing/causality across turns can't be checked without reading | Always UNKNOWN at this tier | Honesty about a gap, not a cheap approximation of it — declaring "can't tell" costs nothing and doesn't risk a confidently wrong heuristic |
+| `grounding` | Whether specific factual claims (numbers, prices, policies) are attributable rather than invented | Regex flags a specific-looking claim; it counts as attributable if backed by a used KB doc id, an adjacent tool call (same or prior turn), or a number token the user supplied within the last 4 turns (exact set intersection). Rate = unattributed / total specific-claim turns, FAIL at ≥50% | UNKNOWN if no specific-claim turns observed; FAIL at ≥50% unattributed; PASS otherwise (score scaled by the rate) | Regex match plus set-intersection/presence checks against fields already on the turn object (KB doc ids, tool calls, prior turn text) — no interpretation of what the claim means |
+| `multi_turn` | Whether the agent makes the user repeat themselves | Exact (normalized: stripped, lowercased) string match of a user turn against every earlier user turn in the same conversation. Rate = conversations with a repeat / conversations sampled, FAIL above 20% | UNKNOWN if no conversations sampled; FAIL above 20%; PASS otherwise | Exact string equality, no fuzzy matching — deliberately blind to the more common paraphrased re-ask, which would need understanding, not comparison |
+| `escalation_health` | Whether escalation to a human happens at a healthy rate — not never, not constantly | Tool-name match (`transfer_to_number`/`transfer_to_agent`) OR a fixed escalation-phrase regex, either counts a conversation as escalated. Rate = escalated / conversations sampled | UNKNOWN if no conversations sampled; FAIL at exactly 0% (floor) or above 60% (ceiling); PASS in between | Tool-name match plus phrase-presence regex — pattern detection, not judgment of whether the escalation was warranted |
+| `sentiment` | Whether the agent leaves users frustrated | An agent turn counts as negative-sentiment when the immediately preceding user turn matches a fixed frustration-keyword regex (EN/ES). Rate = negative-sentiment agent turns / agent turns sampled, FAIL above 25% | UNKNOWN if no agent turns sampled; FAIL above 25%; PASS otherwise | Keyword regex against the previous turn's text plus a turn-index adjacency check — no cause attribution, no real sentiment model |
+| `latency` | Whether the agent responds fast enough for its channel | Real per-turn TTFB (`conversation_turn_metrics.metrics.convai_llm_service_ttfb`) compared to a fixed per-channel band (placeholder ms values). Rate = turns over band / turns with latency data, FAIL above 30% | UNKNOWN if no TTFB data in the sample; FAIL above 30%; PASS otherwise | Numeric comparison of a real telemetry field ElevenLabs already returns against a fixed constant — arithmetic, not reading |
+
+Every row above shares the same structural guarantee: `score_agent()`'s type
+signature takes an `AgentConfigSnapshot` and an `AggregateMetrics`, never a
+raw `ConversationRecord` — so a cheap-pass implementation that started
+reading turn text for meaning would be a type error, not a style violation.
+All thresholds in this table (40 chars, 50%, 20%, 60%, 25%, 30%, the latency
+bands) are placeholders, not tuned cutoffs — see "Eval results" for where
+they land on the golden set today, and the module docstring in
+`cheap_pass.py` for the over-flag-on-purpose rationale.
+
 ### The recipe catalog is the standard/systemic frontier
 
 `rubric.RECIPE_CATALOG` maps a `cause_code` to a fix and a tier
