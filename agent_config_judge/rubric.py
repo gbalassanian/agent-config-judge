@@ -234,6 +234,25 @@ _RECIPES: list[Recipe] = [
         tier=RecipeTier.NUDGE,
     ),
     Recipe(
+        cause_code="system_prompt_too_generic",
+        criterion_id="system_prompt",
+        # Found live: a real agent's entire prompt was "Eres un asistente
+        # útil" ("You are a helpful assistant") — not empty (so
+        # system_prompt_missing doesn't fit), not self-contradictory, just
+        # no bounded role, audience, or scope at all. A third, distinct
+        # failure shape the catalog didn't have a cause for until this one
+        # was found while producing this repo's own recorded judgements.
+        title="Prompt exists but defines no bounded role",
+        fix=(
+            "Replace the generic 'you are a helpful assistant' line with a "
+            "specific role, audience, and explicit scope boundary (what "
+            "this agent does and does NOT handle) using the workspace "
+            "default template."
+        ),
+        tier=RecipeTier.SELF_SERVE,
+        doc_url="https://elevenlabs.io/docs/conversational-ai/customization/system-prompt",
+    ),
+    Recipe(
         cause_code="kb_not_connected",
         criterion_id="knowledge_base",
         title="No knowledge base connected",

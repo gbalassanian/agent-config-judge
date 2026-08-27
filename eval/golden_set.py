@@ -53,9 +53,12 @@ class GoldenCase:
     source: str  # "real" | "synthetic"
     should_flag: bool  # target for cheap-pass recall/precision
     expected_classification: str  # "healthy" | "standard" | "systemic" — what a correct judge concludes
-    # criterion_id -> expected cause_code (None if the criterion should
-    # come back pass/unknown, i.e. not a failure at all)
-    expected_failures: dict[str, str] = field(default_factory=dict)
+    # criterion_id -> expected cause_code for criteria that SHOULD fail.
+    # A value of None means "should fail, but with no valid catalog
+    # mapping" (i.e. this criterion is expected to be the/a systemic
+    # cause) — used only by the two systemic golden cases. A criterion
+    # absent from this dict is expected to come back pass/unknown.
+    expected_failures: dict[str, str | None] = field(default_factory=dict)
     notes: str = ""
 
 
@@ -103,14 +106,20 @@ def _load_real_cases() -> list[GoldenCase]:
         GoldenCase(
             snapshot=snapshots["agent_3701kz9j7j4ffmcbxzdeq0a9h1t0"],  # Onboarding Assistant
             source="real", should_flag=True, expected_classification="standard",
-            expected_failures={"human_handoff": "handoff_tool_unsupported_on_channel"},
+            expected_failures={
+                "human_handoff": "handoff_tool_unsupported_on_channel",
+                "system_prompt": "system_prompt_too_generic",
+            },
             notes=(
                 "THE motivating case. The sampled conversation shows transfer_to_number "
                 "configured and failing at runtime on react_sdk with the exact case-study "
                 "error; today's live config no longer lists any transfer tool at all "
                 "(likely removed since). Ground truth here follows the transcript evidence "
                 "the judge actually has to cite, not the current config's absence of a tool — "
-                "a real config/transcript time-drift this repo did not paper over."
+                "a real config/transcript time-drift this repo did not paper over. Also: the "
+                "live system_prompt is literally 'Eres un asistente útil' — long enough to "
+                "pass the cheap pass's length check, but no bounded role at all, which is what "
+                "led to adding the system_prompt_too_generic recipe to the catalog."
             ),
         ),
         GoldenCase(
@@ -164,30 +173,37 @@ def _synthetic_cases() -> list[GoldenCase]:
         notes="The 45-day figure is stated as fact with no used_static_kb_document_ids — a real grounding failure, not the user-supplied-number trap below.",
     ))
 
-    # S2 — TRAP: grounding proxy flags it, but the number came from the user.
+    # S2 — TRAP: grounding proxy flags it, but the number came from the user
+    # (and the one new claim the agent DOES make is backed by a tool call,
+    # not a KB doc — the same tool-vs-KB attribution the real Operations
+    # Copilot case raises, deliberately doubled up here).
     cases.append(GoldenCase(
         snapshot=_snapshot(
             "synthetic_grounding_trap_user_number", "Synthetic: Order Status Bot",
             "You are an order status agent. Confirm the order number the customer gives you "
-            "and look up its status.",
-            tools=(), kb_ids=("kb_policies",),
+            "and look up its status using the order_lookup tool.",
+            tools=(ToolConfig(name="order_lookup", tool_type="webhook", detail="https://acme.example/orders"),),
+            kb_ids=("kb_policies",),
             conversations=(ConversationRecord("c1", "widget", (
                 _turn("agent", "Hi! What's your order number?"),
                 _turn("user", "It's 48213907, and I ordered 3 units."),
                 _turn("agent", "Got it — order 48213907, 3 units. Let me check the status for you.", kb_ids=()),
-                _turn("agent", "Your order 48213907 shipped yesterday and should arrive in 2 days."),
+                _turn("agent", None, tool_calls=(ToolCallRecord("order_lookup", False),)),
+                _turn("agent", "Your order 48213907 shipped yesterday and should arrive in 2 days.", kb_ids=()),
             )),),
             arr_usd=15000.0,
             synthetic_note=(
-                "FALSE-POSITIVE TRAP (required): cheap pass's grounding proxy sees a specific-looking "
-                "claim (numbers, 'day') with no KB doc used and flags it — but the agent is just "
-                "echoing back the order number and quantity the USER supplied, not asserting an "
-                "ungrounded fact. Correct grounding verdict is pass."
+                "FALSE-POSITIVE TRAP (required): cheap pass's grounding proxy sees specific-looking "
+                "claims (numbers, 'day') with no KB doc used and flags all of them — but the order "
+                "number and quantity are the customer's OWN words echoed back, and the shipping "
+                "status/ETA is backed by the order_lookup tool call immediately before it (visible "
+                "in the transcript, just not as a used_static_kb_document_ids entry). Correct "
+                "grounding verdict is pass; nothing here is an ungrounded, unattributed claim."
             ),
         ),
         source="synthetic", should_flag=True, expected_classification="healthy",
         expected_failures={},
-        notes="Required trap #1: low/zero attribution caused by user-supplied numbers, not a real grounding gap.",
+        notes="Required trap #1: low/zero attribution caused by user-supplied numbers (and tool, not KB, attribution) — not a real grounding gap.",
     ))
 
     # S3 — TRAP: escalation proxy counts zero because escalation happens via a ticket tool.
@@ -237,8 +253,16 @@ def _synthetic_cases() -> list[GoldenCase]:
             synthetic_note="Fallback failure: agent states a made-up policy confidently, and only admits uncertainty after the user pushes back — escalation came after the guess, not instead of it.",
         ),
         source="synthetic", should_flag=True, expected_classification="standard",
-        expected_failures={"fallback": "fallback_guesses_before_escalating"},
-        notes="Sequencing is the failure: escalating eventually doesn't fix answering confidently first.",
+        expected_failures={
+            "fallback": "fallback_guesses_before_escalating",
+            "grounding": "grounding_missing_source_attribution",
+        },
+        notes=(
+            "Sequencing is the fallback failure: escalating eventually doesn't fix answering "
+            "confidently first. The same made-up '10 unpaid sabbatical days' line is ALSO an "
+            "independent grounding failure (specific claim, no KB doc used) — a genuine "
+            "cross-criterion cascade from one bad turn, not double-counting the same cause."
+        ),
     ))
 
     # S5 — multi_turn: re-asks a question already answered.
@@ -308,8 +332,15 @@ def _synthetic_cases() -> list[GoldenCase]:
             synthetic_note="Sentiment failure: the agent itself causes the frustration by repeating the same question after already receiving the answer.",
         ),
         source="synthetic", should_flag=True, expected_classification="standard",
-        expected_failures={"sentiment": "sentiment_agent_caused_frustration"},
-        notes="Root behavior is a multi_turn-shaped repeat, but the observable damage graded here is the sentiment criterion.",
+        expected_failures={
+            "sentiment": "sentiment_agent_caused_frustration",
+            "multi_turn": "multi_turn_repeats_known_answer",
+        },
+        notes=(
+            "Multi_turn is the root behavior (re-asks the email twice after already receiving "
+            "it) and sentiment is the resulting harm — both fail, from the same two repeats, "
+            "which is the honest outcome rather than picking one criterion to blame."
+        ),
     ))
 
     # S8 — bonus trap: user arrives already angry about something unrelated; not the agent's fault.
@@ -317,7 +348,8 @@ def _synthetic_cases() -> list[GoldenCase]:
         snapshot=_snapshot(
             "synthetic_sentiment_trap_not_agents_fault", "Synthetic: Shipping Status Bot",
             "You answer shipping status questions.",
-            tools=(), kb_ids=("kb_shipping",),
+            tools=(ToolConfig(name="create_support_ticket", tool_type="webhook", detail="https://acme.example/tickets"),),
+            kb_ids=("kb_shipping",),
             conversations=(ConversationRecord("c1", "widget", (
                 _turn("agent", "Hi, how can I help?"),
                 _turn("user", "I'm furious, you guys overcharged me $200 on my last invoice and nobody has fixed it."),
@@ -379,7 +411,9 @@ def _synthetic_cases() -> list[GoldenCase]:
             synthetic_note=novel_note,
         ),
         source="synthetic", should_flag=True, expected_classification="systemic",
-        expected_failures={},  # deliberately empty: no criterion maps cleanly, which is the point
+        # None as the expected cause_code means "should fail, but with NO valid catalog
+        # mapping" — the point of this case, not an oversight (see novel_note above).
+        expected_failures={"sentiment": None},
         notes="High-ARR twin of the case below — same failure, routed to escalate_to_engineer instead of nearest_guidance.",
     ))
 
@@ -392,7 +426,7 @@ def _synthetic_cases() -> list[GoldenCase]:
             synthetic_note=novel_note,
         ),
         source="synthetic", should_flag=True, expected_classification="systemic",
-        expected_failures={},
+        expected_failures={"sentiment": None},
         notes="Low-ARR twin of the case above — tests that identical judge output still routes differently by ARR (nearest_guidance + logged recipe gap, not an engineer).",
     ))
 
