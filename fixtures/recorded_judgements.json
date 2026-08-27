@@ -459,7 +459,7 @@
       },
       "escalation_health": {
         "verdict": "pass",
-        "evidence_quote": "I've opened ticket #8841 for our billing team",
+        "evidence_quote": "I've logged this with our billing team as case #8841",
         "evidence_config_field": null,
         "cause_code": null
       },
