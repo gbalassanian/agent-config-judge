@@ -245,11 +245,32 @@ def _merge_tool_rounds(raw_turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 # Regex proxy for "this turn states a specific, checkable fact" — numbers,
-# currency, percentages, or an explicit policy/limit word near a number.
+# currency, percentages, an explicit policy/limit word near a number, a
+# spelled-out quantity, or a bare reference number (ticket/order/case/etc).
 # Deliberately broad (over-flag, per cheap_pass's design brief) rather than
 # precise; the judge is what actually confirms grounding.
+#
+# Originally only matched digit-quantity + unit ("3 days"), missing two
+# real shapes: spelled-out numbers ("three days") and bare IDs with no
+# unit word at all ("ticket #8841", "order 4521") — confirmed against the
+# real portfolio sample, where specific_claim_turns was 0 for every agent
+# despite transcripts containing exactly these shapes. Both additions stay
+# mechanical (a fixed word list / digit pattern), not semantic — same
+# class of check as the rest of this file.
+_CLAIM_UNIT_RE = r"(?:days?|d[ií]as?|hours?|horas?|minutes?|minutos?|weeks?|semanas?|months?|meses?|years?|a[ñn]os?)"
+_NUMBER_WORD_RE = (
+    r"(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
+    r"twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|"
+    r"uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce|veinte|treinta)"
+)
+# Allows one fixed filler word between the quantity and its unit — "5
+# business days" is common phrasing that a bare \d+\s?days wouldn't match.
+# Still a fixed word list, not an open wildcard.
+_CLAIM_FILLER_RE = r"(?:business\s+|calendar\s+)?"
 _SPECIFIC_CLAIM_RE = re.compile(
-    r"(\$\s?\d|\d+\s?%|\bUSD\b|\b\d{1,3}(?:[.,]\d{3})+\b|\b\d+\s?(days?|d[ií]as?|hours?|horas?)\b)",
+    r"(\$\s?\d|\d+\s?%|\bUSD\b|\b\d{1,3}(?:[.,]\d{3})+\b|"
+    rf"\b\d+\s?{_CLAIM_FILLER_RE}{_CLAIM_UNIT_RE}\b|\b{_NUMBER_WORD_RE}\s?{_CLAIM_FILLER_RE}{_CLAIM_UNIT_RE}\b|"
+    r"\b(?:order|ticket|case|account|reference|ref\.?|confirmation)\s*#?\s*\d+\b)",
     re.IGNORECASE,
 )
 
