@@ -219,7 +219,7 @@ def _synthetic_cases() -> list[GoldenCase]:
                 _turn("agent", "Hi, what's up with your billing?"),
                 _turn("user", "I was charged twice for the same invoice and need a refund."),
                 _turn("agent", None, tool_calls=(ToolCallRecord("create_support_ticket", False),)),
-                _turn("agent", "I've opened ticket #8841 for our billing team — they'll refund the duplicate charge and follow up by email within 1 business day."),
+                _turn("agent", "I've logged this with our billing team as case #8841 — they'll refund the duplicate charge and follow up by email within 1 business day."),
             )),),
             arr_usd=25000.0,
             synthetic_note=(
