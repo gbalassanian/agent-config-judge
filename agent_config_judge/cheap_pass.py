@@ -258,7 +258,11 @@ def _score_multi_turn(metrics: AggregateMetrics) -> CriterionScore:
     return CriterionScore(
         "multi_turn", verdict, score,
         f"{metrics.repeated_question_conversations}/{metrics.n_conversations_sampled} "
-        f"sampled conversations show a repeated-question pattern ({rate:.0%}).",
+        f"sampled conversations have a user turn repeating an earlier one verbatim ({rate:.0%}). "
+        "NOTE: only catches literal repeats (e.g. re-stating a phone number the ASR missed) — "
+        "the more common real failure, the agent re-asking the same thing in different words, "
+        "needs to understand that two different phrasings mean the same question, which this "
+        "tier deliberately doesn't attempt; that's judged only by the transcript reader.",
     )
 
 

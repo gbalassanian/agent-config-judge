@@ -86,8 +86,20 @@ class AggregateMetrics:
     escalation_tool_call_count: int = 0
     conversations_with_escalation: int = 0
 
-    # Multi-turn proxy: a later user turn re-supplying information that
-    # matched an earlier turn's extracted slot (crude repeat detector).
+    # Multi-turn proxy: a later user turn that is a VERBATIM (normalized)
+    # repeat of an earlier one in the same conversation — e.g. spelling out
+    # a phone number or confirmation code a second time because the ASR
+    # missed it the first time. This deliberately does NOT try to catch the
+    # more common real failure — the agent re-asking the same thing in
+    # different words ("what's your name" vs "could you tell me your name
+    # again") — because detecting that needs to understand that two
+    # different strings mean the same question, which is a semantic
+    # judgment, not a mechanical one. A similarity heuristic confident
+    # enough to attempt that would just be a worse, cheaper copy of the
+    # judge running inside the tier that isn't supposed to interpret
+    # anything; the honest tradeoff is a proxy with real but narrow recall
+    # (never wrong when it fires, blind to the paraphrased case) rather
+    # than a fuzzy one that can be confidently wrong in either direction.
     repeated_question_conversations: int = 0
 
     # Sentiment proxy: agent turns following a user turn that matched a
