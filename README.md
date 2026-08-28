@@ -28,6 +28,55 @@ A router then turns (classification × account ARR) into exactly one action.
 Detection is 100% automated; anything that would touch a customer's live
 agent comes back `requires_human_approval: true`.
 
+## Plain-language summary (no code needed)
+
+If you don't read code, start here — the rest of this document is for
+people who want to verify the details; this section is the whole idea.
+
+**The problem, in one sentence:** a voice agent can look completely
+fine — it answers, it doesn't crash, every setting is filled in — and
+still be broken in a way nobody notices until a real customer runs into
+it.
+
+**Why nobody notices:** the only way to catch that kind of break is to
+actually read what happened in a real conversation, and nobody has time
+to read every conversation across every agent in a whole portfolio of
+accounts.
+
+**What this project does about it, in two steps:**
+
+1. **A cheap first pass, over every agent.** A quick, mechanical check
+   reads only an agent's settings (never its conversations) and a few
+   basic conversation statistics that were already computed elsewhere —
+   no AI model involved, closer to a spreadsheet formula than a "smart"
+   check. Its only job is deciding which agents deserve a closer look. It
+   deliberately flags more agents than strictly necessary: flagging a
+   healthy agent by mistake just costs one extra review; missing a
+   genuinely broken one costs a real customer.
+2. **A careful second look, only for whatever got flagged.** An AI model
+   reads that agent's settings and a sample of its real conversations,
+   and checks nine specific things that make an agent "healthy" (does it
+   have a clear role? does human handoff actually work on the channel it
+   runs on? does it leave users frustrated? and so on). Crucially, the
+   model's opinion is never taken at face value — a separate, non-AI step
+   checks that every claim it makes is backed by something real (a
+   verbatim quote from the conversation, or a fact from the settings)
+   before trusting it. An unbacked claim is downgraded to "not sure"
+   rather than accepted.
+
+**What comes out the other end:** every agent lands in one of three
+buckets — completely fine, a "known problem with a known fix" (automatable:
+a generic tip, or a message tailored to that account), or "something new
+or unusual that needs a person to look at it." A final step decides the
+actual next action, factoring in how much revenue that account
+represents.
+
+**Where to see this working without reading any code:** the live
+dashboard (see "Live dashboard" below) shows every agent's score, its
+flags, and — for anything the second step reviewed — exactly which of the
+nine checks failed and why, in plain language, with a "how does this
+work?" button that walks through the whole process for anyone curious.
+
 ## The finding that shaped this design
 
 While pulling real data to build this repo's fixtures, I found this live in
@@ -78,6 +127,58 @@ config — it comes from actually reading the prompt).
 **ARR values used anywhere in this repo are a synthetic annotation for the
 router demo**, not real revenue figures — the ElevenLabs Agents API has no
 concept of account revenue, so there was nothing real to pull.
+
+**These scores are a frozen snapshot, not a live number.** They're exactly
+what `fixtures/real_portfolio_snapshot.json` produces — a fixture captured
+at one point in time, kept static on purpose so the CLI demo and the
+golden-set eval below stay reproducible run after run. The live dashboard
+(next section) re-fetches real, current data on a schedule and will show
+different — usually higher, as more real conversation volume accumulates —
+scores for the same agents. Neither number is "wrong"; they're answering
+different questions: "what did this fixture look like when it was built"
+vs. "what does the workspace look like right now."
+
+## Live dashboard
+
+Beyond the fixtures and the CLI, there's a running, browser-viewable
+snapshot of this pipeline's tier-1 output against the real workspace:
+**[Portfolio Console](https://claude.ai/code/artifact/406d6fcc-733a-47a3-8570-32310b85e4fb)**.
+It lives outside this repo's own file tree (it's a published page, not a
+committed script), but it's built entirely on the same code above — no
+separate scoring logic.
+
+- Every real agent in the workspace gets a card: its cheap-pass score,
+  which of the nine criteria passed/failed/unknown (hover any chip for the
+  reasoning), and — if the judge has actually reviewed it — its
+  classification, named failures, and the router's recommended action. An
+  agent the cheap pass never flagged shows a distinct "not flagged" state
+  rather than a fabricated "judge confirmed healthy" — the judge tier is
+  only ever invoked when `cheap_result.flagged` is true (see
+  `pipeline.py`), so showing anything else there would misrepresent what
+  the real pipeline actually does.
+- Two illustrative demo agents (`DEMO - Healthy Support Agent`,
+  `DEMO - Broken Support Agent`) were built specifically for this
+  dashboard, side by side, so the same nine criteria can be seen passing
+  cleanly on one and failing in several different ways on the other —
+  real agents, real simulated conversations, scored by this exact
+  codebase, not hand-waved.
+- A scheduled routine refreshes the tier-1 numbers once a day: it
+  re-fetches every agent's current config and a conversation sample,
+  re-scores it with `cheap_pass.score_agent`, and diffs the workspace's
+  current roster against what the dashboard already tracked — a
+  newly-created agent gets added (shown "not yet judged" until tier 2
+  actually reviews it), and an agent removed from the workspace gets a
+  one-cycle notice before dropping out entirely. **The judge tier is never
+  re-invoked automatically by this refresh**, even when a cheap-pass score
+  changes a lot — flagged instead as a candidate for a human to send back
+  through tier 2, consistent with "detection is 100% automated, anything
+  that touches a live decision needs a human" above.
+- The dashboard has its own in-page FAQ button (top right) with two tabs —
+  one walking through all nine cheap-pass criteria, one walking through
+  the judge's full step-by-step flow (which function does what, what goes
+  in, what comes out) — entirely in plain language, no code shown. It's a
+  shorter, visual companion to this README for anyone who'd rather click
+  through than read source.
 
 ## Architecture
 
@@ -202,6 +303,19 @@ same `validate_judge_output()` — recorded is not a convenience mock, it's how
 the eval stays reproducible when the rubric or the recipe catalog change:
 re-run against the same saved evidence and get a genuinely re-derived
 classification.
+
+### Extra context the judge gets that the cheap pass doesn't
+
+`judge.build_judge_prompt()` includes two fields the cheap pass never
+reads: each knowledge-base document's `usage_mode` (whether it's always
+injected into context vs. retrieved via RAG) and whether RAG is enabled at
+all. This matters for a real edge case: a KB doc set to `usage_mode:
+"auto"` is always in context regardless of whether it was ever
+"retrieved" — so `used_static_kb_document_ids` can stay empty on a turn
+that genuinely used that KB's content. The cheap pass's `grounding` proxy
+has no way to tell the difference and would flag the claim as
+unattributed; only the judge, reading the actual KB content against the
+actual answer, can.
 
 ### How the recorded judgements were produced
 
