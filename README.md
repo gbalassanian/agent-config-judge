@@ -513,6 +513,22 @@ function should be. What changes is everything *around* calling that
 function: how many times, how often, whose secret authorizes it, and
 whether failure in one place can take down the rest.
 
+**What's actually built today, vs. still a plan above:** the "isolation"
+half of point 5 and the retry half of point 2 are real code now, not just
+described here — `ElevenLabsClient._get()` retries 429/5xx and connection
+errors with backoff (never a bad api_key or a 404 — retrying those wastes
+attempts on a permanent condition), `LiveJudgeBackend` raises the
+Anthropic SDK's own retry ceiling for the same reason, `fetch-portfolio`
+writes snapshots incrementally and supports `--resume` so a crash partway
+through a long fetch loses nothing already done, and `scan_portfolio`
+isolates a failing agent into its own `FailedTriage` list instead of
+crashing the whole scan (see `pipeline.py`). What's still exactly as
+described above and NOT built: the async/concurrent fetch itself (today's
+calls are still sequential, just resilient), and the judge tier's Batch
+API integration (still one call at a time, just retried). Concurrency is
+the next layer on top of this one, not a replacement for it — a run that's
+fast but not resilient just fails faster and takes the whole batch with it.
+
 ## Limitations, weakest first
 
 1. **The eval numbers above are not independent validation** (see "Eval

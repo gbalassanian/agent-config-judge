@@ -72,7 +72,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
     snapshots = _load_snapshots(snapshot_path)
     backend = _build_judge_backend(args)
 
-    results = scan_portfolio(snapshots, backend)
+    results, failures = scan_portfolio(snapshots, backend)
     summary = summarize(results)
 
     print(f"Scanned {summary.total_agents} agent(s); "
@@ -85,6 +85,13 @@ def cmd_scan(args: argparse.Namespace) -> None:
     print(f"actions:         {summary.action_counts}")
     print(f"needs approval:  {summary.requires_approval_count}")
     print(f"recipe gaps:     {summary.recipe_gap_count}")
+    if failures:
+        # These agents are NOT counted anywhere above — they never reached
+        # a classification at all, which is a different (and worse) state
+        # than "healthy" or "not_flagged". Surfaced loudly, on purpose.
+        print(f"\n{len(failures)} agent(s) FAILED to triage (no classification, needs a re-run):")
+        for f in failures:
+            print(f"  ! {f.agent_id:32s} {f.name[:28]:28s} {f.error}")
 
     if args.output:
         out = {
@@ -96,6 +103,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
                 "action_counts": summary.action_counts,
                 "requires_approval_count": summary.requires_approval_count,
                 "recipe_gap_count": summary.recipe_gap_count,
+                "failed_count": len(failures),
             },
             "agents": [
                 {
@@ -111,6 +119,10 @@ def cmd_scan(args: argparse.Namespace) -> None:
                 }
                 for r in results
             ],
+            "failed_agents": [
+                {"agent_id": f.agent_id, "name": f.name, "error": f.error}
+                for f in failures
+            ],
         }
         Path(args.output).parent.mkdir(parents=True, exist_ok=True)
         Path(args.output).write_text(json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -118,29 +130,62 @@ def cmd_scan(args: argparse.Namespace) -> None:
 
 
 def cmd_fetch_portfolio(args: argparse.Namespace) -> None:
-    from agent_config_judge.elevenlabs_client import ElevenLabsClient, build_agent_snapshot
+    from agent_config_judge.elevenlabs_client import ElevenLabsApiError, ElevenLabsClient, build_agent_snapshot
 
     arr_map: dict[str, float] = {}
     if args.arr_file:
         arr_map = json.loads(Path(args.arr_file).read_text(encoding="utf-8"))
 
+    out_path = Path(args.out)
+    snapshots: list[AgentSnapshot] = []
+    already_fetched: set[str] = set()
+    if args.resume and out_path.exists():
+        snapshots = _load_snapshots(out_path)
+        already_fetched = {s.agent_id for s in snapshots}
+        print(f"--resume: {len(snapshots)} agent(s) already in {out_path}, will skip those.")
+
     client = ElevenLabsClient()
     agents = client.list_agents()
     print(f"Found {len(agents)} agent(s) in the workspace.")
 
-    snapshots: list[AgentSnapshot] = []
+    # One agent being unreachable (even after ElevenLabsClient's own
+    # retries are exhausted — see elevenlabs_client.py) must not sink the
+    # whole fetch. At real scale some non-zero number of agents WILL fail
+    # for reasons that have nothing to do with the other N-1, so a failure
+    # here is recorded and reported, never silently dropped and never fatal
+    # to the run.
+    failed: list[tuple[str, str]] = []
     for a in agents:
         agent_id = a["agent_id"]
-        raw_agent = client.get_agent(agent_id)
-        raw_convs_meta = client.list_conversations(agent_id, page_size=args.sample_size)[: args.sample_size]
-        raw_convs = [client.get_conversation(c["conversation_id"]) for c in raw_convs_meta]
-        snap = build_agent_snapshot(raw_agent, raw_convs, arr_usd=arr_map.get(agent_id))
+        if agent_id in already_fetched:
+            continue
+        try:
+            raw_agent = client.get_agent(agent_id)
+            raw_convs_meta = client.list_conversations(agent_id, page_size=args.sample_size)[: args.sample_size]
+            raw_convs = [client.get_conversation(c["conversation_id"]) for c in raw_convs_meta]
+            snap = build_agent_snapshot(raw_agent, raw_convs, arr_usd=arr_map.get(agent_id))
+        except ElevenLabsApiError as e:
+            print(f"  ! FAILED {agent_id} ({a.get('name', '')}): {e}")
+            failed.append((agent_id, str(e)))
+            continue
         snapshots.append(snap)
         print(f"  fetched {agent_id} ({a.get('name', '')}): {len(raw_convs)} conversation(s) sampled")
+        # Write after every agent, not just once at the end: a crash (or a
+        # Ctrl-C) partway through loses nothing already fetched, and
+        # --resume picks up exactly where it left off. This rewrites the
+        # whole file each time — O(n) per agent, O(n^2) total — which is
+        # fine for the portfolio sizes this PoC targets but is exactly the
+        # kind of thing a real 10k-agent production version would replace
+        # with an append-only format instead of a full JSON array rewrite.
+        _save_snapshots(snapshots, out_path)
 
-    _save_snapshots(snapshots, Path(args.out))
-    print(f"\nWrote {len(snapshots)} agent snapshot(s) to {args.out}")
-    print("NOTE: raw text is NOT redacted by this command. Run scripts/redact_snapshot.py "
+    print(f"\nWrote {len(snapshots)} agent snapshot(s) to {out_path}")
+    if failed:
+        print(f"\n{len(failed)} agent(s) FAILED and were skipped (not written):")
+        for agent_id, err in failed:
+            print(f"  - {agent_id}: {err}")
+        print("Re-run with --resume to retry just the missing/failed agents.")
+    print("\nNOTE: raw text is NOT redacted by this command. Run scripts/redact_snapshot.py "
           "before committing any fetched snapshot to a repo.")
 
 
@@ -183,6 +228,8 @@ def main(argv: list[str] | None = None) -> int:
     p_fetch.add_argument("--out", required=True, help="Where to write the snapshot JSON.")
     p_fetch.add_argument("--sample-size", type=int, default=20, help="Max conversations sampled per agent.")
     p_fetch.add_argument("--arr-file", help="Optional JSON file mapping agent_id -> arr_usd.")
+    p_fetch.add_argument("--resume", action="store_true",
+                          help="Skip agent_ids already present in --out (from a prior partial/failed run).")
     p_fetch.set_defaults(func=cmd_fetch_portfolio)
 
     p_demo = sub.add_parser("demo", help="Run the full pipeline on the bundled fixtures. No API keys needed.")

@@ -75,16 +75,34 @@ class ElevenLabsApiError(RuntimeError):
     pass
 
 
+# Retried because they're transient — the request was probably fine, the
+# server or the network wasn't. 429 (rate limit) and the 5xx family. NOT
+# retried: 401/403 (bad key, retrying won't fix it), 404 (retrying an agent
+# that doesn't exist wastes attempts on a permanent condition), or any other
+# 4xx — those are the caller's problem, not a blip.
+_RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
+
+
 @dataclass
 class ElevenLabsClient:
     """Thin wrapper over the four Agents API endpoints this project uses.
 
     Auth is the xi-api-key header, per the Agents API — not a Bearer token.
+
+    Retries transient failures (429/5xx, and connection-level errors like a
+    dropped connection or read timeout) with exponential backoff + jitter.
+    This exists because a portfolio scan makes many sequential calls per
+    agent — at real scale that's thousands of requests, and without a
+    retry a single transient blip anywhere in that chain kills the whole
+    run. It does NOT exist to paper over a wrong api_key or a bad path;
+    non-retryable errors still fail on the first attempt, same as before.
     """
 
     api_key: str | None = None
     base_url: str = ELEVENLABS_API_BASE
     timeout_secs: float = 30.0
+    max_retries: int = 4  # attempts AFTER the first — 5 tries total on a transient failure
+    retry_base_delay_secs: float = 1.0
     _session: Any = None
 
     def __post_init__(self) -> None:
@@ -96,18 +114,64 @@ class ElevenLabsClient:
                 "See .env.example."
             )
 
+    def _sleep_before_retry(self, attempt: int, retry_after_header: str | None) -> None:
+        import random
+        import time
+
+        # Honor the server's own Retry-After when it gives one (rate-limit
+        # responses often do) — it knows its own recovery time better than
+        # our guess does. Fall back to exponential backoff otherwise.
+        delay = None
+        if retry_after_header is not None:
+            try:
+                delay = float(retry_after_header)
+            except ValueError:
+                delay = None
+        if delay is None:
+            delay = self.retry_base_delay_secs * (2 ** attempt)
+        delay += random.uniform(0, delay * 0.25)  # jitter: staggers retries so a
+        # burst of agents that all hit the same transient failure don't all
+        # retry in lockstep and immediately re-trigger the same rate limit.
+        time.sleep(delay)
+
     def _get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         import requests  # imported lazily so the rest of the package has no hard dep
 
-        resp = requests.get(
-            f"{self.base_url}{path}",
-            headers={"xi-api-key": self.api_key},
-            params=params or {},
-            timeout=self.timeout_secs,
-        )
-        if resp.status_code != 200:
+        last_error: Exception | None = None
+        for attempt in range(self.max_retries + 1):
+            try:
+                resp = requests.get(
+                    f"{self.base_url}{path}",
+                    headers={"xi-api-key": self.api_key},
+                    params=params or {},
+                    timeout=self.timeout_secs,
+                )
+            except requests.exceptions.RequestException as e:
+                # Connection-level failure (timeout, DNS, dropped socket) —
+                # no status code to check, but it's exactly the transient
+                # case retry exists for.
+                last_error = e
+                if attempt < self.max_retries:
+                    self._sleep_before_retry(attempt, retry_after_header=None)
+                    continue
+                raise ElevenLabsApiError(
+                    f"GET {path} failed after {attempt + 1} attempt(s): {e}"
+                ) from e
+
+            if resp.status_code == 200:
+                return resp.json()
+
+            if resp.status_code in _RETRYABLE_STATUS_CODES and attempt < self.max_retries:
+                self._sleep_before_retry(attempt, retry_after_header=resp.headers.get("Retry-After"))
+                continue
+
+            # Either a non-retryable status, or a retryable one with no
+            # attempts left — both are terminal.
             raise ElevenLabsApiError(f"GET {path} -> {resp.status_code}: {resp.text[:500]}")
-        return resp.json()
+
+        # Unreachable in practice (the loop always returns or raises above)
+        # but keeps this a well-typed function rather than an implicit None.
+        raise ElevenLabsApiError(f"GET {path} failed after {self.max_retries + 1} attempt(s)") from last_error
 
     def list_agents(self, page_size: int = 100) -> list[dict[str, Any]]:
         agents: list[dict[str, Any]] = []
