@@ -475,12 +475,15 @@ how much they'd actually cost to build:
    `CheapPassResult`/judge classification), never the raw key or transcripts.
    Whatever this becomes at scale, it's opt-in per workspace by
    construction — the alternative doesn't exist in the API surface.
-2. **Fetching goes from sync to async.** `ElevenLabsClient` today makes
-   blocking `requests` calls in a loop — fine for one workspace's handful
-   of agents, not for hundreds of workspaces in parallel. An async HTTP
-   client (`httpx.AsyncClient` or similar) with a per-workspace concurrency
-   cap turns "N workspaces sequentially" into "N workspaces concurrently,"
-   which is the difference between a scan taking hours and minutes.
+2. **Fetching goes from sync to async.** Within one workspace, `fetch-portfolio`
+   now fetches agents through a bounded thread pool (`--max-workers`, default
+   5) instead of one at a time — see below. What's still exactly the plan
+   this point originally described: fanning that out *across* workspaces.
+   Concurrent agents inside one workspace and concurrent workspaces are
+   different axes — an async HTTP client (`httpx.AsyncClient` or similar)
+   with a per-workspace concurrency cap is what turns "N workspaces
+   sequentially" into "N workspaces concurrently," which is the difference
+   between a scan taking hours and minutes at real multi-tenant volume.
 3. **Judge calls batch instead of firing one at a time.** `judge.py`'s
    `LiveJudgeBackend` calls the Anthropic API per agent. At real volume,
    most of those calls aren't time-sensitive (a nightly or weekly scan, not
@@ -514,20 +517,41 @@ function: how many times, how often, whose secret authorizes it, and
 whether failure in one place can take down the rest.
 
 **What's actually built today, vs. still a plan above:** the "isolation"
-half of point 5 and the retry half of point 2 are real code now, not just
-described here — `ElevenLabsClient._get()` retries 429/5xx and connection
-errors with backoff (never a bad api_key or a 404 — retrying those wastes
-attempts on a permanent condition), `LiveJudgeBackend` raises the
-Anthropic SDK's own retry ceiling for the same reason, `fetch-portfolio`
-writes snapshots incrementally and supports `--resume` so a crash partway
-through a long fetch loses nothing already done, and `scan_portfolio`
-isolates a failing agent into its own `FailedTriage` list instead of
-crashing the whole scan (see `pipeline.py`). What's still exactly as
-described above and NOT built: the async/concurrent fetch itself (today's
-calls are still sequential, just resilient), and the judge tier's Batch
-API integration (still one call at a time, just retried). Concurrency is
-the next layer on top of this one, not a replacement for it — a run that's
-fast but not resilient just fails faster and takes the whole batch with it.
+half of point 5, the retry half of point 2, and (as of this update) the
+within-workspace half of point 2's concurrency are real code now, not just
+described here:
+
+- `ElevenLabsClient._get()` retries 429/5xx and connection errors with
+  backoff (never a bad api_key or a 404 — retrying those wastes attempts on
+  a permanent condition).
+- `LiveJudgeBackend` raises the Anthropic SDK's own retry ceiling for the
+  same reason.
+- `fetch-portfolio` fetches agents through a bounded thread pool
+  (`--max-workers`, `_fetch_agents_concurrently` in `cli.py`) instead of one
+  at a time, writes snapshots incrementally under a lock so concurrent
+  workers never tear the checkpoint file, and supports `--resume` so a
+  crash partway through a long fetch loses nothing already done.
+- `scan_portfolio` isolates a failing agent into its own `FailedTriage` list
+  instead of crashing the whole scan (see `pipeline.py`).
+
+What's still exactly as described above and NOT built: fanning fetches out
+*across* workspaces (today's concurrency is bounded within one workspace's
+agent list, not across many), and the judge tier's Batch API integration or
+any concurrency on it at all — every judge call is still one at a time,
+just retried. That's deliberate, not an oversight: paralleling paid LLM
+calls is a real budget decision, not a free engineering win like the
+ElevenLabs side is, so it's being held back for an explicit call on how
+much to spend testing it at volume rather than defaulted into existing
+alongside everything else here. Concurrency (wherever it lands) is also
+the next layer on top of resilience, never a replacement for it — a run
+that's fast but not resilient just fails faster and takes the whole batch
+with it.
+
+The `--max-workers` default (5) is, like the ARR threshold elsewhere in
+this README, a placeholder guess — it hasn't been tuned against
+ElevenLabs' real rate limits, because that requires traffic at a volume
+this repo hasn't been run at. Treat it as a starting point to calibrate,
+not a validated number.
 
 ## Limitations, weakest first
 
