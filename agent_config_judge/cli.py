@@ -62,12 +62,19 @@ def _print_triage_line(result: TriageResult) -> None:
 
 def _build_judge_backend(args: argparse.Namespace) -> JudgeBackend:
     if args.backend == "live":
-        return LiveJudgeBackend(model=args.model)
-    fixture = Path(args.fixture) if args.fixture else DEFAULT_RECORDED_JUDGEMENTS_PATH
-    if not fixture.exists():
-        print(f"error: recorded judgements fixture not found at {fixture}", file=sys.stderr)
-        sys.exit(1)
-    return RecordedJudgeBackend(fixture_path=str(fixture))
+        backend: JudgeBackend = LiveJudgeBackend(model=args.model)
+    else:
+        fixture = Path(args.fixture) if args.fixture else DEFAULT_RECORDED_JUDGEMENTS_PATH
+        if not fixture.exists():
+            print(f"error: recorded judgements fixture not found at {fixture}", file=sys.stderr)
+            sys.exit(1)
+        backend = RecordedJudgeBackend(fixture_path=str(fixture))
+
+    if args.judge_cache:
+        from agent_config_judge.judge_cache import CachedJudgeBackend
+        backend = CachedJudgeBackend(backend=backend, cache_path=Path(args.judge_cache))
+
+    return backend
 
 
 def cmd_scan(args: argparse.Namespace) -> None:
@@ -249,6 +256,7 @@ def cmd_demo(args: argparse.Namespace) -> None:
     args.fixture = str(DEFAULT_RECORDED_JUDGEMENTS_PATH)
     args.model = "unused"
     args.output = args.output or None
+    args.judge_cache = None
     cmd_scan(args)
 
 
@@ -276,6 +284,14 @@ def main(argv: list[str] | None = None) -> int:
     p_scan.add_argument("--fixture", help="Recorded-judgements JSON file (backend=recorded only).")
     p_scan.add_argument("--model", default="claude-sonnet-5", help="Model id (backend=live only).")
     p_scan.add_argument("--output", help="Write a JSON triage report here.")
+    p_scan.add_argument(
+        "--judge-cache",
+        help="Path to a judge-result cache file. When set, an agent whose config and sampled "
+             "conversations are byte-identical to the last cached run for its agent_id reuses "
+             "that cached judgement instead of calling the judge again — see judge_cache.py. "
+             "Off by default: omit this flag to always call the judge fresh, exactly today's "
+             "behavior.",
+    )
     p_scan.set_defaults(func=cmd_scan)
 
     p_fetch = sub.add_parser("fetch-portfolio", help="Pull real agents+conversations from ElevenLabs (needs ELEVENLABS_API_KEY).")

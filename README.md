@@ -520,12 +520,21 @@ how much they'd actually cost to build:
    fires the request does.
 4. **Re-scanning should be incremental, not full, every time.** Nothing
    here needs re-scoring if neither the agent's config nor its
-   conversation sample changed since the last run. A hash of
-   (`system_prompt`, `tools`, `knowledge_base_ids`) plus the newest
-   `conversation_id` seen turns "re-run the whole pipeline on a schedule"
-   into "re-run only on agents that actually changed" — the same
-   cheap-pass-before-judge cost asymmetry this repo already leans on,
-   applied across time instead of across criteria.
+   conversation sample changed since the last run — the judge tier
+   specifically, since that's the one with a real dollar cost per call.
+   `agent_config_judge/judge_cache.py`'s `CachedJudgeBackend` does exactly
+   this: wraps any `JudgeBackend`, fingerprints the same text
+   `build_judge_prompt` is built from, and skips the real call when an
+   agent's fingerprint matches its last cached run — pass `--judge-cache
+   PATH` to `agentjudge scan` to turn it on (off by default, so existing
+   behavior is unchanged unless asked for). This turns "re-run the whole
+   pipeline on a schedule" into "re-run the judge only on agents that
+   actually changed" — the same cheap-pass-before-judge cost asymmetry
+   this repo already leans on, applied across time instead of across
+   criteria. What's still exactly a plan: this is a single JSON file, not
+   a real store — fine for one workspace's portfolio, not for a fleet of
+   concurrent scans writing to it (see the module's own docstring on
+   why it isn't thread-safe as written).
 5. **Multi-tenant means real isolation, not just a loop over workspaces.**
    Each workspace's API key is a secret belonging to that customer and
    must be stored/rotated per-tenant (a secrets manager, not a shared
@@ -543,9 +552,9 @@ function: how many times, how often, whose secret authorizes it, and
 whether failure in one place can take down the rest.
 
 **What's actually built today, vs. still a plan above:** the "isolation"
-half of point 5, the retry half of point 2, and (as of this update) the
-within-workspace half of point 2's concurrency are real code now, not just
-described here:
+half of point 5, the retry half of point 2, the within-workspace half of
+point 2's concurrency, and point 4's incremental re-scanning are real code
+now, not just described here:
 
 - `ElevenLabsClient._get()` retries 429/5xx and connection errors with
   backoff (never a bad api_key or a 404 — retrying those wastes attempts on
@@ -559,6 +568,9 @@ described here:
   crash partway through a long fetch loses nothing already done.
 - `scan_portfolio` isolates a failing agent into its own `FailedTriage` list
   instead of crashing the whole scan (see `pipeline.py`).
+- `agent_config_judge/judge_cache.py`'s `CachedJudgeBackend` (`--judge-cache`
+  on `agentjudge scan`) skips a real judge call when an agent's config +
+  conversation sample fingerprint hasn't changed since the last cached run.
 
 What's still exactly as described above and NOT built: fanning fetches out
 *across* workspaces (today's concurrency is bounded within one workspace's
