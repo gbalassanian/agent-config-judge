@@ -483,17 +483,40 @@ def _synthetic_cases() -> list[GoldenCase]:
             "You only handle scheduling — for billing or clinical questions, escalate.",
             tools=(ToolConfig(name="transfer_to_agent", tool_type="system", system_tool_type="transfer_to_agent"),),
             kb_ids=("kb_clinic_hours",),
-            conversations=(ConversationRecord("c1", "widget", (
-                _turn("agent", "Hi, thanks for calling Riverside Dental — how can I help?"),
-                _turn("user", "I'd like to book a cleaning for next Thursday, I'm Alex Kim."),
-                _turn("agent", "Got it, Alex — a cleaning next Thursday. What time works best?"),
-                _turn("user", "Morning if possible."),
-                _turn("agent", "I have 9:30am next Thursday for a cleaning under Alex Kim — should I confirm that?"),
-                _turn("user", "Yes, and one more thing, how much does a cleaning cost?"),
-                _turn("agent", "That's a billing question, so let me connect you with our front desk for exact pricing.", tool_calls=(ToolCallRecord("transfer_to_agent", False),)),
-            )),),
+            # Two conversations, not one — see MIN_CONVERSATIONS_FOR_RATE_VERDICT in
+            # cheap_pass.py. A single conversation makes multi_turn and
+            # escalation_health mechanically read as an extreme 0%/100%, which is
+            # exactly the small-n artifact task #17 fixed; a "fully healthy" control
+            # case needs enough sample to actually score healthy, not just be
+            # narratively healthy. c1 also picks up a grounded factual claim (cited to
+            # the KB) and TTFB data on both conversations, for the same reason:
+            # grounding and latency need real, checkable signal, not a narrative gap.
+            conversations=(
+                ConversationRecord("c1", "widget", (
+                    _turn("agent", "Hi, thanks for calling Riverside Dental — how can I help?", ttfb_ms=600),
+                    _turn("user", "I'd like to book a cleaning for next Thursday, I'm Alex Kim."),
+                    _turn("agent", "Got it, Alex — a cleaning next Thursday. What time works best?"),
+                    _turn("user", "Morning if possible."),
+                    _turn("agent", "I have 9:30am next Thursday for a cleaning under Alex Kim — should I confirm that?"),
+                    _turn("user", "Sounds good. Quick question — how long does a cleaning usually take?"),
+                    _turn("agent", "Cleanings usually take about 30 minutes.", kb_ids=("kb_clinic_hours",)),
+                    _turn("user", "Great, thanks — one more thing, how much does a cleaning cost?"),
+                    _turn("agent", "That's a billing question, so let me connect you with our front desk for exact pricing.", tool_calls=(ToolCallRecord("transfer_to_agent", False),)),
+                )),
+                ConversationRecord("c2", "widget", (
+                    _turn("agent", "Hi, thanks for calling Riverside Dental — how can I help?", ttfb_ms=550),
+                    _turn("user", "I need to book a check-up next Tuesday, this is Jamie Lee."),
+                    _turn("agent", "Got it, Jamie — a check-up next Tuesday. What time works best?"),
+                    _turn("user", "Afternoon, please."),
+                    _turn("agent", "I have 2:00pm next Tuesday for a check-up under Jamie Lee — should I confirm that?"),
+                    _turn("user", "Yes, that works."),
+                    _turn("agent", "Great, you're all set for 2:00pm next Tuesday. Anything else?"),
+                    _turn("user", "No, that's all, thanks."),
+                    _turn("agent", "You're welcome — see you then!"),
+                )),
+            ),
             arr_usd=35000.0,
-            synthetic_note="Fully healthy control case: bounded prompt, working handoff, no repeats, correctly escalates the one out-of-scope question, no ungrounded claims.",
+            synthetic_note="Fully healthy control case: bounded prompt, working handoff, no repeats, correctly escalates the one out-of-scope question, no ungrounded claims — across two conversations, so 'healthy' is an actual sample-backed reading, not a single-conversation coin flip.",
         ),
         source="synthetic", should_flag=False, expected_classification="healthy",
         expected_failures={},

@@ -3,6 +3,18 @@
 A two-tier detector for misconfigured ElevenLabs conversational voice agents,
 built to run against a portfolio of accounts rather than one agent at a time.
 
+**Why this exists:** I built this to demonstrate, end to end, the exact work
+an adoption/deployment-facing role at ElevenLabs actually does — proactively
+auditing customer agents' prompts, configs, and tool setup to find gaps at
+scale, instead of reviewing accounts one at a time by hand. The two-tier
+design (a free mechanical pass on every agent, an LLM read only for whatever
+that flags) is the concrete answer to "how do you audit a high-volume book
+without it becoming bespoke, manual work per account" — and the eval harness
+below exists so the detector's own accuracy is a measured number, not a
+claim. See "Path to scale" and the live dashboard's "Does this scale?" tab
+for the honest version of what's real production-ready today versus still a
+plan.
+
 ## The problem this exists to solve
 
 A misconfigured voice agent usually looks fine. It answers calls, it doesn't
@@ -406,9 +418,9 @@ escalates through a ticket-creation tool the proxy metric doesn't count).
 
 ```
 --- cheap pass (recall first, precision second) ---
-n=19  TP=18 FP=1 TN=0 FN=0
+n=19  TP=18 FP=0 TN=1 FN=0
 recall:    100%
-precision: 95%
+precision: 100%
 
 --- judge: classification accuracy + false-positive rate on healthy agents ---
 n=19  accuracy=100%
@@ -440,13 +452,27 @@ of 16 correctly-identified mapped failures, cause_code matched ground truth in 1
   more rigorous; that would be a different kind of dishonesty. The honest
   version is: treat these numbers as "the mechanism is internally
   consistent," not "this judge is 100% accurate."
-- **The one real miss in this run is genuine, not staged**: the cheap pass
-  flags `synthetic_healthy_agent` — a case built to be fully healthy — as
-  needing review. Root cause: with a single sampled conversation, one
-  justified escalation reads as a 100% escalation rate, which trips the
-  "runaway" ceiling check in `cheap_pass.py`. That's a real placeholder-
-  threshold artifact at small sample sizes, exactly the kind of thing
-  `cheap_pass.py`'s own comments say isn't calibrated yet.
+- **This run has zero misses, and that's a recent change, not the original
+  state — worth being honest about what moved and why.** Earlier versions of
+  this eval had one genuine miss: the cheap pass flagged
+  `synthetic_healthy_agent` — a case built to be fully healthy — as needing
+  review. Root cause: with a single sampled conversation, several rate-based
+  criteria (`multi_turn`, `escalation_health`, `latency`) have no possible
+  middle reading — a rate computed from one data point is mechanically
+  either 0% or 100% — so one justified escalation read as a 100%
+  "runaway" rate, tripping a ceiling check that was never meant to fire on
+  noise that thin. Fixed two ways: `cheap_pass.py` now requires a minimum
+  sample size before any of those criteria return pass/fail at all (below
+  it, they report unknown — worse than a pass, per this file's own
+  asymmetric-cost design, but not a false fail either); and the golden case
+  itself was given a second conversation, real TTFB data, and one
+  KB-attributed factual claim, because a "fully healthy" control case needs
+  enough sample to actually score healthy, not just enough narrative to
+  sound healthy. Confirmed this was the real mechanism, not a coincidence,
+  by reproducing the miss with real portfolio data first (an agent's
+  `escalation_health` verdict flipped FAIL-at-n=1 to PASS-at-n=3 across two
+  real daily refreshes, with no actual change in the agent's behavior)
+  before touching either fix.
 - Building the golden set surfaced two real gaps in the rubric/catalog,
   fixed in place rather than worked around: a genuine third `system_prompt`
   failure shape needed its own recipe (`system_prompt_too_generic` — the
