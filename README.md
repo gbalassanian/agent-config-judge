@@ -204,16 +204,38 @@ separate scoring logic.
 
 ## Architecture
 
+The mechanism itself — what actually happens to one agent, end to end:
+
+```mermaid
+flowchart TD
+    Start["Agent: config + conversation sample"] --> Cheap{"Cheap pass<br/>9 criteria, config + counts only<br/>no LLM, no transcript reading"}
+    Cheap -- "score ≥ 85, no tool errors" --> NotFlagged["not_flagged<br/>action: no_action"]
+    Cheap -- "score < 85, or a tool error<br/>in the sample" --> Judge["LLM Judge<br/>reads config + real transcripts<br/>names a cause, cites evidence"]
+    Judge --> Validate["validate_judge_output()<br/>quotes checked verbatim against<br/>real transcripts; unbacked claims<br/>downgraded to unknown"]
+    Validate --> Classify{"classification<br/>recomputed from validated failures,<br/>never trusted from the model's<br/>own claim"}
+    Classify -- "all pass / unknown,<br/>no failures" --> Healthy["healthy<br/>action: no_action"]
+    Classify -- "every failure maps<br/>to a known recipe" --> Standard{"standard"}
+    Standard -- "all recipes self-serve" --> SelfServe["self_serve_fix"]
+    Standard -- "at least one needs an<br/>account-specific message" --> Nudge["targeted_nudge"]
+    Classify -- "at least one failure has<br/>no known recipe" --> Systemic{"systemic"}
+    Systemic -- "high ARR" --> Escalate["escalate_to_engineer"]
+    Systemic -- "low/unknown ARR" --> Nearest["nearest_guidance<br/>+ logs a RecipeGap"]
+```
+
+And which file owns which piece of that:
+
 ```
 agent_config_judge/
   rubric.py             nine criteria (data) + the recipe catalog (the standard/systemic boundary)
   models.py             AgentConfigSnapshot / AggregateMetrics / ConversationRecord — see below
   cheap_pass.py          tier 1: proxy scorer over config + aggregate metrics only
   judge.py               tier 2: prompt, strict JSON contract, evidence-enforcing validator
+  judge_cache.py         skips a real judge call when nothing it would read has changed
+                         since the last cached run for that agent_id (opt-in, --judge-cache)
   router.py              classification x ARR -> exactly one action
   elevenlabs_client.py   real Agents API client + mechanical metrics derivation
   pipeline.py            wires the three tiers together
-  cli.py                 `agentjudge scan|fetch-portfolio|demo|show-recipe`
+  cli.py                 `agentjudge scan|evaluate|fetch-portfolio|demo|show-recipe`
 eval/
   golden_set.py          19 labeled cases: 5 real + 14 synthetic (2 required false-positive traps + more)
   run_eval.py             the harness — three separate scorecards, see "Eval results"
@@ -225,7 +247,9 @@ scripts/
   produce_recorded_judgements.py    provenance: how the recorded judgements were produced
   calibrate_latency_bands.py        reports observed TTFB percentiles per channel from a snapshot;
                                      never auto-applies them (see "Limitations")
-tests/                            26 tests on the load-bearing contract rules (see "Running the tests")
+  redact_snapshot.py                strips real system prompts, tool endpoints, and conversation
+                                     text from a fetched snapshot before it's ever committed anywhere
+tests/                            47 tests on the load-bearing contract rules (see "Running the tests")
 ```
 
 ### The nine criteria
