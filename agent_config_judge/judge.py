@@ -340,8 +340,71 @@ class Judgement:
         return [c for c in self.criteria.values() if c.is_unmapped_failure]
 
 
+# Curly/smart quote variants -> straight ASCII, so a citation that survives
+# a copy/paste through something that "prettifies" quotes still matches.
+_QUOTE_TRANSLATION = str.maketrans({
+    "‘": "'", "’": "'",
+    "“": '"', "”": '"',
+})
+
+# Irregular contractions: the stem itself changes, not just an expansion, so
+# these need an exact whole-word swap before the generic suffix rules below
+# run — a plain "n't" -> " not" rule would turn "can't" into "ca not", not
+# "cannot".
+_IRREGULAR_CONTRACTIONS = {
+    "can't": "cannot",
+    "won't": "will not",
+    "shan't": "shall not",
+}
+
+# Regular clitic suffixes: the stem is unchanged, just expanded. The target
+# picked for each doesn't have to be the "correct" expansion in context
+# ("'d" collapses both "had" and "would") — it only has to be applied
+# consistently, since both the judge's citation and the real transcript text
+# pass through this same function before being compared. Deliberately
+# excludes "'s": it's genuinely ambiguous between "is"/"has" and a
+# possessive ("Alex's"), and guessing wrong would change what the text
+# means instead of just how it's punctuated — exactly the risk this
+# function exists to avoid.
+_CLITIC_SUFFIXES = (
+    ("n't", " not"), ("'re", " are"), ("'ve", " have"),
+    ("'ll", " will"), ("'d", " would"), ("'m", " am"),
+)
+
+
 def _normalize_for_match(s: str) -> str:
-    return re.sub(r"\s+", " ", s).strip().lower()
+    """Collapse cosmetic differences a real quote can pick up when the judge
+    reproduces it from context, without tolerating anything that changes
+    what it actually says.
+
+    Three narrow, hand-picked passes — deliberately not a general similarity
+    score: a hand-picked list of "harmless" differences can't quietly grow
+    into "close enough" the way a fuzzy-match threshold could, which matters
+    here because the failure mode this guards against (a citation that
+    changed the actual claim — a different number, a different fact) is
+    worse than the one it accepts (rejecting a same-fact citation over
+    formatting and downgrading it to "unknown," which never crashes
+    anything, just under-reports).
+
+      1. Curly quotes -> straight quotes (typographic only).
+      2. Contractions -> one canonical expanded form, so "can't" and
+         "cannot" — or a transcript's "don't" reproduced as "do not" —
+         compare equal.
+      3. Sentence punctuation (,.;:!?) stripped, *except* between two
+         digits, where it's part of the number itself ("45.00", "1,000")
+         rather than punctuation — stripping it there would let two
+         genuinely different numbers collide into the same normalized text,
+         which is exactly the kind of false match this function must not
+         introduce.
+    """
+    s = s.translate(_QUOTE_TRANSLATION)
+    s = re.sub(r"\s+", " ", s).strip().lower()
+    for word, expanded in _IRREGULAR_CONTRACTIONS.items():
+        s = re.sub(r"\b" + re.escape(word) + r"\b", expanded, s)
+    for suffix, expanded in _CLITIC_SUFFIXES:
+        s = re.sub(re.escape(suffix) + r"\b", expanded, s)
+    s = re.sub(r"(?<!\d)[,.;:!?]|[,.;:!?](?!\d)", "", s)
+    return re.sub(r"\s+", " ", s).strip()
 
 
 def _validate_one_criterion(
