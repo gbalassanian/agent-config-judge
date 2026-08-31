@@ -681,6 +681,28 @@ not a validated number.
 
 ## Limitations, weakest first
 
+**"Healthy" is a defined scope, not an absolute claim, and that's worth
+stating before anything else here.** This tool calls an agent healthy when
+it passes nine specific, named criteria (`rubric.py`) — chosen from real
+failure cases found while building this repo, refined the way a Deployment
+Strategist or FDE would refine them, not derived from an exhaustive survey
+of every way a voice agent can go wrong. That's a deliberate scope
+decision, stated explicitly, not a gap discovered after the fact: an agent
+that passes all nine can still fail in a way none of the nine were built to
+see, and every layer of this system — cheap pass, judge, router — would
+call it healthy, because none of them were designed to look anywhere else.
+No fixed rubric closes that door completely; the honest response isn't
+pretending it's closed, it's naming how the list of nine is meant to grow:
+(a) the judge's free-text `notes` field, read by a human on a schedule
+rather than acted on automatically, for a recurring pattern the nine don't
+name; (b) real customer complaints about an agent this tool already called
+healthy — the one source of ground truth that owes nothing to this
+project's own authorship, and the strongest signal available; (c)
+occasional manual review of raw transcripts by someone deliberately not
+looking through the nine-criteria lens. Any of those surfacing the same gap
+more than once is the actual bar for "this deserves a tenth criterion," not
+a hunch.
+
 1. **The eval numbers above are not independent validation** (see "Eval
    results"). This is the single biggest asterisk on everything in this
    repo. Getting a real accuracy number requires a live `ANTHROPIC_API_KEY`
