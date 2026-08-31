@@ -3,6 +3,13 @@
 A two-tier detector for misconfigured ElevenLabs conversational voice agents,
 built to run against a portfolio of accounts rather than one agent at a time.
 
+**In one sentence:** this automates the repeatable, mechanical part of what
+an FDE/Deployment Strategist does to triage an agent — detect a concern,
+confirm it with cited evidence, and recommend an action — while leaving
+explicitly to a human everything that still needs real judgment: a failure
+mode outside what this tool was built to check for (see "Limitations"),
+an ambiguous call, and any actual change to a customer's live agent.
+
 **Why this exists:** I built this to demonstrate, end to end, the exact work
 an adoption/deployment-facing role at ElevenLabs actually does — proactively
 auditing customer agents' prompts, configs, and tool setup to find gaps at
