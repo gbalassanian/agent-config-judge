@@ -185,12 +185,22 @@ separate scoring logic.
   changes a lot — flagged instead as a candidate for a human to send back
   through tier 2, consistent with "detection is 100% automated, anything
   that touches a live decision needs a human" above.
-- The dashboard has its own in-page FAQ button (top right) with two tabs —
-  one walking through all nine cheap-pass criteria, one walking through
-  the judge's full step-by-step flow (which function does what, what goes
-  in, what comes out) — entirely in plain language, no code shown. It's a
-  shorter, visual companion to this README for anyone who'd rather click
-  through than read source.
+- The dashboard has its own in-page FAQ button (top right) with three
+  tabs — one walking through all nine cheap-pass criteria, one walking
+  through the judge's full step-by-step flow (which function does what,
+  what goes in, what comes out), and one honestly answering "does this
+  scale?" (✓ what's real code today vs. ○ what's still a plan, kept in
+  sync with "Path to scale" below) — entirely in plain language, no code
+  shown. It's a shorter, visual companion to this README for anyone who'd
+  rather click through than read source.
+- A filter bar above the agent grid narrows the view by free-text search
+  (agent name or `agent_id`) and by classification (unjudged / not
+  flagged / healthy / standard / systemic) — purely client-side, filtering
+  what's already tracked here. Deliberately *not* "look up any agent
+  live" (that's the `evaluate` CLI command above, or the future button
+  described in "Path to scale" — both need either a live API key on your
+  own machine or a real backend this dashboard doesn't have); this is the
+  free half: search within what this portfolio already scanned.
 
 ## Architecture
 
@@ -380,11 +390,14 @@ pip install -r requirements.txt
 pytest
 ```
 
-26 tests covering the load-bearing contract rules — evidence enforcement
+47 tests covering the load-bearing contract rules — evidence enforcement
 (including the fabricated-quote check), the recipe-mapping-owns-
-classification rule, all four router branches, the forced-flag rule, and a
-regression guard on the golden set (cheap-pass recall must stay perfect;
-the two required false-positive traps must keep resolving to healthy).
+classification rule, all four router branches, the forced-flag rule, a
+regression guard on the golden set (cheap-pass recall and precision must
+stay perfect; the two required false-positive traps must keep resolving to
+healthy), retry/backoff and per-agent isolation on the fetch and judge
+tiers, real concurrency in the bounded fetch pool, and the judge-result
+cache's hit/miss behavior.
 
 ### With your own ElevenLabs workspace
 
@@ -399,6 +412,38 @@ fixture (a different workspace has different agent_ids) — that's
 intentional, not a bug: recorded replay only works for agents it has
 judgements for. Add `ANTHROPIC_API_KEY` and pass `--backend live` to judge a
 real new portfolio instead.
+
+### On demand: evaluate a single agent
+
+`scan` is the whole-portfolio flow above: prepare a snapshot file first,
+then triage everyone in it — the Adoption Strategist's use case, scanning
+a whole book at once. There's a second, narrower entry point for a
+different real job: someone (an FDE, a Deployment Strategist) who has one
+specific agent someone is asking about right now, and doesn't want to
+prepare a snapshot file just to check it.
+
+```bash
+PYTHONPATH=. python3 -m agent_config_judge.cli evaluate --agent-id agent_xxx --backend live
+```
+
+Fetches that one agent live from ElevenLabs and triages it in a single
+step — no intermediate file. It's not a second scoring path: `evaluate`
+calls the exact same `triage_agent()` function `scan` calls internally, so
+a given agent gets the identical verdict either way. Two things only this
+entry point needs:
+
+- `--force-judge` — run the judge even if the cheap pass didn't flag this
+  agent. A deliberate, visible override for a human who wants the deep
+  read regardless (an on-demand check on one agent is cheap enough to
+  justify that choice; doing it by default across a whole portfolio scan
+  would not be — see "Path to scale" below on judge cost).
+- `--snapshot PATH` — pick `--agent-id` out of an existing snapshot file
+  instead of fetching live, for testing/demos with no `ELEVENLABS_API_KEY`
+  needed (e.g. `--snapshot fixtures/real_portfolio_snapshot.json`).
+
+Same `--backend`, `--fixture`, `--model`, and `--judge-cache` flags as
+`scan` — including the cache, so checking the same unchanged agent twice
+in a row doesn't pay for the judge twice either.
 
 ### Full pipeline with both real keys
 
