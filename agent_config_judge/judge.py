@@ -223,10 +223,19 @@ class LiveJudgeBackend:
     Kept as a thin wrapper: prompt construction and output validation are
     shared with the recorded backend, so the only thing this class owns is
     the actual network call and pulling JSON out of the model's free text.
+
+    Retries: the Anthropic SDK already retries connection errors and
+    429/5xx responses with backoff on its own (default max_retries=2) — we
+    don't reimplement that here, we just raise the ceiling. A one-off
+    interactive call should fail fast after a couple of tries; a portfolio
+    scan running unattended over thousands of agents overnight can afford
+    to wait longer rather than lose one agent's judgement to a blip that
+    would have cleared on the fourth or fifth attempt.
     """
 
     model: str = "claude-sonnet-5"
     max_tokens: int = 4096
+    max_retries: int = 5
     _client: Any = field(default=None, repr=False)
 
     def _get_client(self) -> Any:
@@ -245,7 +254,7 @@ class LiveJudgeBackend:
                 "ANTHROPIC_API_KEY is not set. The live judge backend needs it; "
                 "use --backend recorded to run against saved judgements instead."
             )
-        self._client = anthropic.Anthropic(api_key=api_key)
+        self._client = anthropic.Anthropic(api_key=api_key, max_retries=self.max_retries)
         return self._client
 
     def judge(self, config: AgentConfigSnapshot, conversations: tuple[ConversationRecord, ...]) -> dict[str, Any]:

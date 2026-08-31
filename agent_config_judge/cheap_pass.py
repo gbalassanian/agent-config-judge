@@ -120,6 +120,32 @@ NEGATIVE_SENTIMENT_LABEL_FAIL_RATE = 0.25
 # Latency: over-band rate above this fails.
 LATENCY_OVER_BAND_FAIL_RATE = 0.3
 
+# Minimum sample size before a rate-based criterion is allowed to return
+# PASS/FAIL at all, rather than unknown. Exists because a rate computed
+# from a single conversation has zero middle ground — it is mechanically
+# either 0% or 100%, an extreme reading no matter what actually happened —
+# and this project watched that produce a real, misleading flip on real
+# portfolio data: an agent's escalation_health verdict went from FAIL (at
+# n=1: 0/1 escalated) to PASS (at n=3: 1/3) purely because more real calls
+# had happened between two runs, with no change in the agent's actual
+# behavior. Below this many samples, the rate is noise, not signal — scored
+# as unknown (worse than a pass, per the module's asymmetric-cost brief,
+# but not a false fail either) rather than let a fluke reading masquerade
+# as a finding.
+#
+# Two constants because the denominators are on different scales
+# (conversations vs. individual turns) — CALIBRATION STATUS applies to
+# both exactly like every other threshold in this file: unvalidated
+# placeholders, not tuned against a labeled portfolio. Deliberately set to
+# the smallest value that rules out the single-sample degenerate case
+# (n=1 can ONLY read 0% or 100% — there is no possible middle reading) —
+# not raised further, because much of eval/golden_set.py's synthetic
+# cases are built at exactly n=1 or a handful of turns by design, to
+# isolate one failure pattern per case; a much higher minimum here would
+# quietly defeat what those fixtures are for rather than fix the real bug.
+MIN_CONVERSATIONS_FOR_RATE_VERDICT = 2
+MIN_TURNS_FOR_RATE_VERDICT = 2
+
 # Phone-only transfer tool, but the agent's observed channels are all
 # non-telephony: this is the exact config-passes-but-runtime-fails case
 # from the case study. Cheap pass gets a *partial* heuristic for it from
@@ -278,6 +304,13 @@ def _score_multi_turn(metrics: AggregateMetrics) -> CriterionScore:
     rate = _rate(metrics.repeated_question_conversations, metrics.n_conversations_sampled)
     if rate is None:
         return CriterionScore("multi_turn", Verdict.UNKNOWN, _VERDICT_SCORE[Verdict.UNKNOWN], "No conversations sampled.")
+    if metrics.n_conversations_sampled < MIN_CONVERSATIONS_FOR_RATE_VERDICT:
+        return CriterionScore(
+            "multi_turn", Verdict.UNKNOWN, _VERDICT_SCORE[Verdict.UNKNOWN],
+            f"Only {metrics.n_conversations_sampled} conversation(s) sampled — a rate computed from "
+            f"that few has no possible middle reading (it's mechanically 0% or 100%), so this is "
+            "scored as unknown rather than trusted as a finding.",
+        )
     verdict = Verdict.FAIL if rate > REPEAT_QUESTION_FAIL_RATE else Verdict.PASS
     score = _VERDICT_SCORE[verdict] if verdict == Verdict.FAIL else max(0.0, 100.0 * (1 - rate))
     return CriterionScore(
@@ -295,6 +328,13 @@ def _score_escalation_health(metrics: AggregateMetrics) -> CriterionScore:
     rate = _rate(metrics.conversations_with_escalation, metrics.n_conversations_sampled)
     if rate is None:
         return CriterionScore("escalation_health", Verdict.UNKNOWN, _VERDICT_SCORE[Verdict.UNKNOWN], "No conversations sampled.")
+    if metrics.n_conversations_sampled < MIN_CONVERSATIONS_FOR_RATE_VERDICT:
+        return CriterionScore(
+            "escalation_health", Verdict.UNKNOWN, _VERDICT_SCORE[Verdict.UNKNOWN],
+            f"Only {metrics.n_conversations_sampled} conversation(s) sampled — a rate computed from "
+            f"that few has no possible middle reading (it's mechanically 0% or 100%), so this is "
+            "scored as unknown rather than trusted as a finding. See golden set false-positive trap.",
+        )
     if rate <= ESCALATION_RATE_FLOOR:
         return CriterionScore(
             "escalation_health", Verdict.FAIL, _VERDICT_SCORE[Verdict.FAIL],
@@ -324,6 +364,13 @@ def _score_sentiment(metrics: AggregateMetrics) -> CriterionScore:
     # older account/version that hasn't backfilled it).
     if metrics.conversations_with_sentiment_label > 0:
         label_rate = _rate(metrics.conversations_negative_sentiment_label, metrics.conversations_with_sentiment_label)
+        if metrics.conversations_with_sentiment_label < MIN_CONVERSATIONS_FOR_RATE_VERDICT:
+            return CriterionScore(
+                "sentiment", Verdict.UNKNOWN, _VERDICT_SCORE[Verdict.UNKNOWN],
+                f"Only {metrics.conversations_with_sentiment_label} conversation(s) with a real "
+                "sentiment label — a rate computed from that few has no possible middle reading, "
+                "so this is scored as unknown rather than trusted as a finding.",
+            )
         verdict = Verdict.FAIL if label_rate > NEGATIVE_SENTIMENT_LABEL_FAIL_RATE else Verdict.PASS
         score = _VERDICT_SCORE[verdict] if verdict == Verdict.FAIL else max(0.0, 100.0 * (1 - label_rate))
         return CriterionScore(
@@ -337,6 +384,13 @@ def _score_sentiment(metrics: AggregateMetrics) -> CriterionScore:
     rate = _rate(metrics.negative_sentiment_turns, metrics.agent_turns_sampled)
     if rate is None:
         return CriterionScore("sentiment", Verdict.UNKNOWN, _VERDICT_SCORE[Verdict.UNKNOWN], "No agent turns sampled.")
+    if metrics.agent_turns_sampled < MIN_TURNS_FOR_RATE_VERDICT:
+        return CriterionScore(
+            "sentiment", Verdict.UNKNOWN, _VERDICT_SCORE[Verdict.UNKNOWN],
+            f"Only {metrics.agent_turns_sampled} agent turn(s) sampled — a rate computed from that "
+            "few has no possible middle reading, so this is scored as unknown rather than trusted "
+            "as a finding.",
+        )
     verdict = Verdict.FAIL if rate > NEGATIVE_SENTIMENT_FAIL_RATE else Verdict.PASS
     score = _VERDICT_SCORE[verdict] if verdict == Verdict.FAIL else max(0.0, 100.0 * (1 - rate))
     return CriterionScore(
@@ -353,6 +407,13 @@ def _score_latency(metrics: AggregateMetrics) -> CriterionScore:
     rate = _rate(metrics.turns_over_latency_band, metrics.turns_with_latency_data)
     if rate is None:
         return CriterionScore("latency", Verdict.UNKNOWN, _VERDICT_SCORE[Verdict.UNKNOWN], "No TTFB data in the sample.")
+    if metrics.turns_with_latency_data < MIN_TURNS_FOR_RATE_VERDICT:
+        return CriterionScore(
+            "latency", Verdict.UNKNOWN, _VERDICT_SCORE[Verdict.UNKNOWN],
+            f"Only {metrics.turns_with_latency_data} turn(s) with TTFB data — a rate computed from "
+            "that few has no possible middle reading, so this is scored as unknown rather than "
+            "trusted as a finding.",
+        )
     verdict = Verdict.FAIL if rate > LATENCY_OVER_BAND_FAIL_RATE else Verdict.PASS
     score = _VERDICT_SCORE[verdict] if verdict == Verdict.FAIL else max(0.0, 100.0 * (1 - rate))
     return CriterionScore(

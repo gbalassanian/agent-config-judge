@@ -29,6 +29,25 @@ class TriageResult:
     routing: RoutingDecision
 
 
+@dataclass(frozen=True)
+class FailedTriage:
+    """One agent scan_portfolio could not complete — the judge call raised
+    (retries exhausted, a validation error, whatever) after the cheap pass
+    flagged it. Kept as its own list, never coerced into a TriageResult:
+    judgement=None on a TriageResult has a specific, load-bearing meaning
+    (route_unflagged's "not_flagged", not judge-confirmed "healthy" — see
+    route_unflagged's docstring), and silently reusing it for "the judge
+    errored out" would corrupt that distinction and the eval harness
+    numbers that depend on it. An agent that failed here got NO
+    classification and NO routing decision — it needs a retry, not a
+    guess.
+    """
+
+    agent_id: str
+    name: str
+    error: str
+
+
 def triage_agent(snapshot: AgentSnapshot, judge_backend: JudgeBackend) -> TriageResult:
     cheap_result = score_agent(snapshot.config, snapshot.metrics)
 
@@ -48,8 +67,27 @@ def triage_agent(snapshot: AgentSnapshot, judge_backend: JudgeBackend) -> Triage
     )
 
 
-def scan_portfolio(snapshots: list[AgentSnapshot], judge_backend: JudgeBackend) -> list[TriageResult]:
-    return [triage_agent(s, judge_backend) for s in snapshots]
+def scan_portfolio(
+    snapshots: list[AgentSnapshot], judge_backend: JudgeBackend
+) -> tuple[list[TriageResult], list[FailedTriage]]:
+    """Runs triage_agent over every snapshot, isolating failures per agent.
+
+    One agent's judge call raising (LiveJudgeBackend retries exhausted, a
+    malformed recorded fixture, anything) must never sink the whole
+    portfolio scan — at real scale, some non-zero number of agents WILL
+    fail for reasons that have nothing to do with the other N-1. Cheap-pass
+    scoring itself isn't wrapped here: it's pure, in-memory, and has no
+    failure mode this catch is meant for — a real bug there should still
+    surface loudly rather than get silently demoted to a FailedTriage row.
+    """
+    results: list[TriageResult] = []
+    failures: list[FailedTriage] = []
+    for s in snapshots:
+        try:
+            results.append(triage_agent(s, judge_backend))
+        except Exception as e:  # noqa: BLE001 — deliberately broad, see docstring
+            failures.append(FailedTriage(agent_id=s.agent_id, name=s.name, error=f"{type(e).__name__}: {e}"))
+    return results, failures
 
 
 @dataclass(frozen=True)

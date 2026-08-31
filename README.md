@@ -3,6 +3,18 @@
 A two-tier detector for misconfigured ElevenLabs conversational voice agents,
 built to run against a portfolio of accounts rather than one agent at a time.
 
+**Why this exists:** I built this to demonstrate, end to end, the exact work
+an adoption/deployment-facing role at ElevenLabs actually does — proactively
+auditing customer agents' prompts, configs, and tool setup to find gaps at
+scale, instead of reviewing accounts one at a time by hand. The two-tier
+design (a free mechanical pass on every agent, an LLM read only for whatever
+that flags) is the concrete answer to "how do you audit a high-volume book
+without it becoming bespoke, manual work per account" — and the eval harness
+below exists so the detector's own accuracy is a measured number, not a
+claim. See "Path to scale" and the live dashboard's "Does this scale?" tab
+for the honest version of what's real production-ready today versus still a
+plan.
+
 ## The problem this exists to solve
 
 A misconfigured voice agent usually looks fine. It answers calls, it doesn't
@@ -406,9 +418,9 @@ escalates through a ticket-creation tool the proxy metric doesn't count).
 
 ```
 --- cheap pass (recall first, precision second) ---
-n=19  TP=18 FP=1 TN=0 FN=0
+n=19  TP=18 FP=0 TN=1 FN=0
 recall:    100%
-precision: 95%
+precision: 100%
 
 --- judge: classification accuracy + false-positive rate on healthy agents ---
 n=19  accuracy=100%
@@ -440,13 +452,27 @@ of 16 correctly-identified mapped failures, cause_code matched ground truth in 1
   more rigorous; that would be a different kind of dishonesty. The honest
   version is: treat these numbers as "the mechanism is internally
   consistent," not "this judge is 100% accurate."
-- **The one real miss in this run is genuine, not staged**: the cheap pass
-  flags `synthetic_healthy_agent` — a case built to be fully healthy — as
-  needing review. Root cause: with a single sampled conversation, one
-  justified escalation reads as a 100% escalation rate, which trips the
-  "runaway" ceiling check in `cheap_pass.py`. That's a real placeholder-
-  threshold artifact at small sample sizes, exactly the kind of thing
-  `cheap_pass.py`'s own comments say isn't calibrated yet.
+- **This run has zero misses, and that's a recent change, not the original
+  state — worth being honest about what moved and why.** Earlier versions of
+  this eval had one genuine miss: the cheap pass flagged
+  `synthetic_healthy_agent` — a case built to be fully healthy — as needing
+  review. Root cause: with a single sampled conversation, several rate-based
+  criteria (`multi_turn`, `escalation_health`, `latency`) have no possible
+  middle reading — a rate computed from one data point is mechanically
+  either 0% or 100% — so one justified escalation read as a 100%
+  "runaway" rate, tripping a ceiling check that was never meant to fire on
+  noise that thin. Fixed two ways: `cheap_pass.py` now requires a minimum
+  sample size before any of those criteria return pass/fail at all (below
+  it, they report unknown — worse than a pass, per this file's own
+  asymmetric-cost design, but not a false fail either); and the golden case
+  itself was given a second conversation, real TTFB data, and one
+  KB-attributed factual claim, because a "fully healthy" control case needs
+  enough sample to actually score healthy, not just enough narrative to
+  sound healthy. Confirmed this was the real mechanism, not a coincidence,
+  by reproducing the miss with real portfolio data first (an agent's
+  `escalation_health` verdict flipped FAIL-at-n=1 to PASS-at-n=3 across two
+  real daily refreshes, with no actual change in the agent's behavior)
+  before touching either fix.
 - Building the golden set surfaced two real gaps in the rubric/catalog,
   fixed in place rather than worked around: a genuine third `system_prompt`
   failure shape needed its own recipe (`system_prompt_too_generic` — the
@@ -475,12 +501,15 @@ how much they'd actually cost to build:
    `CheapPassResult`/judge classification), never the raw key or transcripts.
    Whatever this becomes at scale, it's opt-in per workspace by
    construction — the alternative doesn't exist in the API surface.
-2. **Fetching goes from sync to async.** `ElevenLabsClient` today makes
-   blocking `requests` calls in a loop — fine for one workspace's handful
-   of agents, not for hundreds of workspaces in parallel. An async HTTP
-   client (`httpx.AsyncClient` or similar) with a per-workspace concurrency
-   cap turns "N workspaces sequentially" into "N workspaces concurrently,"
-   which is the difference between a scan taking hours and minutes.
+2. **Fetching goes from sync to async.** Within one workspace, `fetch-portfolio`
+   now fetches agents through a bounded thread pool (`--max-workers`, default
+   5) instead of one at a time — see below. What's still exactly the plan
+   this point originally described: fanning that out *across* workspaces.
+   Concurrent agents inside one workspace and concurrent workspaces are
+   different axes — an async HTTP client (`httpx.AsyncClient` or similar)
+   with a per-workspace concurrency cap is what turns "N workspaces
+   sequentially" into "N workspaces concurrently," which is the difference
+   between a scan taking hours and minutes at real multi-tenant volume.
 3. **Judge calls batch instead of firing one at a time.** `judge.py`'s
    `LiveJudgeBackend` calls the Anthropic API per agent. At real volume,
    most of those calls aren't time-sensitive (a nightly or weekly scan, not
@@ -512,6 +541,43 @@ contract, and router are exactly as scale-agnostic as a per-agent decision
 function should be. What changes is everything *around* calling that
 function: how many times, how often, whose secret authorizes it, and
 whether failure in one place can take down the rest.
+
+**What's actually built today, vs. still a plan above:** the "isolation"
+half of point 5, the retry half of point 2, and (as of this update) the
+within-workspace half of point 2's concurrency are real code now, not just
+described here:
+
+- `ElevenLabsClient._get()` retries 429/5xx and connection errors with
+  backoff (never a bad api_key or a 404 — retrying those wastes attempts on
+  a permanent condition).
+- `LiveJudgeBackend` raises the Anthropic SDK's own retry ceiling for the
+  same reason.
+- `fetch-portfolio` fetches agents through a bounded thread pool
+  (`--max-workers`, `_fetch_agents_concurrently` in `cli.py`) instead of one
+  at a time, writes snapshots incrementally under a lock so concurrent
+  workers never tear the checkpoint file, and supports `--resume` so a
+  crash partway through a long fetch loses nothing already done.
+- `scan_portfolio` isolates a failing agent into its own `FailedTriage` list
+  instead of crashing the whole scan (see `pipeline.py`).
+
+What's still exactly as described above and NOT built: fanning fetches out
+*across* workspaces (today's concurrency is bounded within one workspace's
+agent list, not across many), and the judge tier's Batch API integration or
+any concurrency on it at all — every judge call is still one at a time,
+just retried. That's deliberate, not an oversight: paralleling paid LLM
+calls is a real budget decision, not a free engineering win like the
+ElevenLabs side is, so it's being held back for an explicit call on how
+much to spend testing it at volume rather than defaulted into existing
+alongside everything else here. Concurrency (wherever it lands) is also
+the next layer on top of resilience, never a replacement for it — a run
+that's fast but not resilient just fails faster and takes the whole batch
+with it.
+
+The `--max-workers` default (5) is, like the ARR threshold elsewhere in
+this README, a placeholder guess — it hasn't been tuned against
+ElevenLabs' real rate limits, because that requires traffic at a volume
+this repo hasn't been run at. Treat it as a starting point to calibrate,
+not a validated number.
 
 ## Limitations, weakest first
 
