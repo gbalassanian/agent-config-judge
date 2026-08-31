@@ -256,7 +256,7 @@ scripts/
                                      never auto-applies them (see "Limitations")
   redact_snapshot.py                strips real system prompts, tool endpoints, and conversation
                                      text from a fetched snapshot before it's ever committed anywhere
-tests/                            47 tests on the load-bearing contract rules (see "Running the tests")
+tests/                            54 tests on the load-bearing contract rules (see "Running the tests")
 ```
 
 ### The nine criteria
@@ -347,6 +347,20 @@ alone can't guarantee:
   checked for presence. A plausible-sounding but fabricated citation is
   discarded and the verdict downgraded, exactly like a missing one.
 
+The match is exact, not fuzzy — after a narrow, hand-picked normalization
+(`_normalize_for_match`): curly quotes, contractions ("don't"/"do not"),
+and sentence punctuation are treated as cosmetic, but a genuinely different
+number or fact (90 days vs. 45) is never treated as the same citation, and
+punctuation between two digits ("45.00", "1,000") is left alone rather than
+risking two different numbers colliding into the same normalized text.
+This is a deliberate choice over a similarity-score threshold: a real quote
+the judge reproduced with one character changed used to be indistinguishable
+from a fabricated one and got discarded the same way — downgrading a real
+failure to `unknown`, which the router treats exactly like a pass — while a
+broader fuzzy match would fix that at the cost of risking the opposite,
+worse failure this whole mechanism exists to prevent. See
+`_normalize_for_match`'s docstring for the full reasoning.
+
 ### Two judge backends, one validator
 
 `LiveJudgeBackend` calls the real Anthropic API (needs `ANTHROPIC_API_KEY`).
@@ -421,8 +435,10 @@ pip install -r requirements.txt
 pytest
 ```
 
-47 tests covering the load-bearing contract rules — evidence enforcement
-(including the fabricated-quote check), the recipe-mapping-owns-
+54 tests covering the load-bearing contract rules — evidence enforcement
+(including the fabricated-quote check and the normalization that keeps a
+cosmetically-reworded real quote from being wrongly discarded as one — see
+"Evidence is enforced, not requested"), the recipe-mapping-owns-
 classification rule, all four router branches, the forced-flag rule, a
 regression guard on the golden set (cheap-pass recall and precision must
 stay perfect; the two required false-positive traps must keep resolving to
