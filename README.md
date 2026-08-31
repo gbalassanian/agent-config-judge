@@ -613,6 +613,25 @@ how much they'd actually cost to build:
    ElevenLabs API calls and the judge's LLM spend, since "one big shared
    bill" stops being answerable to "did customer X's scan cost more than
    customer Y's" the moment there's more than a handful of tenants.
+6. **Integration/tool health-checking is observed-failure-only, not an
+   active probe — known, not fixed.** Everything this repo knows about
+   whether a configured tool (webhook, MCP server, transfer-to-number,
+   any enterprise integration) actually works comes from
+   `tool_results[].is_error` on calls that happened to occur inside the
+   sampled conversations — a tool error anywhere in the sample forces a
+   judge read regardless of score (see `cheap_pass.py`'s
+   `_has_tool_error`), and two recipes exist for it
+   (`multi_turn_repeats_failed_tool_call`, and human handoff's
+   channel-mismatch case). That's a real, high-precision signal — zero
+   false positives, since it only fires on a failure that actually
+   happened to a real user — but it's blind to a broken integration that
+   simply wasn't invoked during the sample window: a rarely-called tool
+   with an expired credential, or a brand-new integration nobody has
+   exercised yet, shows no error and passes clean. Closing that gap needs
+   a second, active mechanism — a scheduled smoke-test that calls every
+   configured tool/webhook directly and checks the response, independent
+   of live traffic — which is a deliberately different, complementary
+   layer, not a bigger version of what's here.
 
 None of this changes what's scored or how — the rubric, cheap pass, judge
 contract, and router are exactly as scale-agnostic as a per-agent decision
