@@ -14,6 +14,7 @@ without API keys".
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import os
 import sys
@@ -22,9 +23,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
-from agent_config_judge.judge import JudgeBackend, LiveJudgeBackend, RecordedJudgeBackend
+from agent_config_judge.cheap_pass import score_agent
+from agent_config_judge.judge import JudgeBackend, LiveJudgeBackend, RecordedJudgeBackend, run_judge
 from agent_config_judge.models import AgentSnapshot, agent_snapshot_from_dict, agent_snapshot_to_dict
-from agent_config_judge.pipeline import TriageResult, scan_portfolio, summarize
+from agent_config_judge.pipeline import TriageResult, scan_portfolio, summarize, triage_agent
+from agent_config_judge.router import route
 from agent_config_judge.rubric import get_recipe
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -133,6 +136,67 @@ def cmd_scan(args: argparse.Namespace) -> None:
                 {"agent_id": f.agent_id, "name": f.name, "error": f.error}
                 for f in failures
             ],
+        }
+        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.output).write_text(json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")
+        print(f"\nWrote report to {args.output}")
+
+
+def cmd_evaluate(args: argparse.Namespace) -> None:
+    """On-demand triage of exactly one agent — the FDE/Deployment-Strategist
+    entry point, distinct from `scan`'s "prepare a whole portfolio file
+    first" flow. Reuses triage_agent() for the default path unchanged (so a
+    given agent gets the identical verdict here as it would inside a full
+    scan), and only bypasses it — narrowly, visibly — for --force-judge,
+    which is an explicit human override of the cheap-pass gate, not a
+    second code path that quietly duplicates the pipeline's logic.
+    """
+    if args.snapshot:
+        snapshots = _load_snapshots(Path(args.snapshot))
+        matches = [s for s in snapshots if s.agent_id == args.agent_id]
+        if not matches:
+            print(f"error: agent_id {args.agent_id!r} not found in {args.snapshot}", file=sys.stderr)
+            sys.exit(1)
+        snapshot = matches[0]
+    else:
+        from agent_config_judge.elevenlabs_client import ElevenLabsClient, build_agent_snapshot
+
+        client = ElevenLabsClient()
+        print(f"Fetching {args.agent_id} live from ElevenLabs...")
+        raw_agent = client.get_agent(args.agent_id)
+        raw_convs_meta = client.list_conversations(args.agent_id, page_size=args.sample_size)[: args.sample_size]
+        raw_convs = [client.get_conversation(c["conversation_id"]) for c in raw_convs_meta]
+        snapshot = build_agent_snapshot(raw_agent, raw_convs, arr_usd=args.arr_usd)
+        print(f"  fetched: {len(raw_convs)} conversation(s) sampled")
+
+    backend = _build_judge_backend(args)
+    result = triage_agent(snapshot, backend)
+
+    if args.force_judge and result.judgement is None:
+        # The cheap pass didn't flag this agent, but a human explicitly
+        # asked for the deep read anyway — a deliberate, visible override
+        # of the gate, not a second scoring path. triage_agent() itself
+        # stays untouched; this is the one place --force-judge is allowed
+        # to reach past it, and only when there was no judge read already.
+        print("  --force-judge: cheap pass did not flag this agent, but running the judge anyway.")
+        judgement = run_judge(backend, snapshot.config, snapshot.conversations)
+        routing = route(judgement, snapshot.arr_usd)
+        result = dataclasses.replace(result, judgement=judgement, routing=routing)
+
+    print()
+    _print_triage_line(result)
+
+    if args.output:
+        out = {
+            "agent_id": result.agent_id,
+            "name": result.name,
+            "cheap_pass_score": result.cheap_pass.score,
+            "flagged": result.cheap_pass.flagged,
+            "forced_flag": result.cheap_pass.forced_flag,
+            "classification": result.routing.classification,
+            "action": result.routing.action.value,
+            "requires_human_approval": result.routing.requires_human_approval,
+            "detail": result.routing.detail,
         }
         Path(args.output).parent.mkdir(parents=True, exist_ok=True)
         Path(args.output).write_text(json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -293,6 +357,33 @@ def main(argv: list[str] | None = None) -> int:
              "behavior.",
     )
     p_scan.set_defaults(func=cmd_scan)
+
+    p_eval = sub.add_parser(
+        "evaluate",
+        help="Triage exactly one agent on demand — fetch it live (or pick it out of an existing "
+             "snapshot file) and triage it in one step, no portfolio file to prepare first. The "
+             "FDE/Deployment-Strategist entry point, as opposed to scan's whole-portfolio flow.",
+    )
+    p_eval.add_argument("--agent-id", required=True, help="The agent to evaluate.")
+    p_eval.add_argument(
+        "--snapshot",
+        help="Pick --agent-id out of this existing snapshot JSON instead of fetching live from "
+             "ElevenLabs (no ELEVENLABS_API_KEY needed this way — useful for testing/demos).",
+    )
+    p_eval.add_argument("--sample-size", type=int, default=20, help="Max conversations sampled (live fetch only).")
+    p_eval.add_argument("--arr-usd", type=float, help="This agent's ARR, for routing (live fetch only).")
+    p_eval.add_argument("--backend", choices=["live", "recorded"], default="recorded")
+    p_eval.add_argument("--fixture", help="Recorded-judgements JSON file (backend=recorded only).")
+    p_eval.add_argument("--model", default="claude-sonnet-5", help="Model id (backend=live only).")
+    p_eval.add_argument("--judge-cache", help="Same judge-result cache as scan — see judge_cache.py.")
+    p_eval.add_argument(
+        "--force-judge", action="store_true",
+        help="Run the judge even if the cheap pass didn't flag this agent — a deliberate, visible "
+             "override for a human who wants the deep read regardless. Off by default: the normal "
+             "cheap-pass gate applies here exactly like it does in a full scan.",
+    )
+    p_eval.add_argument("--output", help="Write a JSON report here too.")
+    p_eval.set_defaults(func=cmd_evaluate)
 
     p_fetch = sub.add_parser("fetch-portfolio", help="Pull real agents+conversations from ElevenLabs (needs ELEVENLABS_API_KEY).")
     p_fetch.add_argument("--out", required=True, help="Where to write the snapshot JSON.")
