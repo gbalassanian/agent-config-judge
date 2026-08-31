@@ -256,7 +256,7 @@ scripts/
                                      never auto-applies them (see "Limitations")
   redact_snapshot.py                strips real system prompts, tool endpoints, and conversation
                                      text from a fetched snapshot before it's ever committed anywhere
-tests/                            54 tests on the load-bearing contract rules (see "Running the tests")
+tests/                            56 tests on the load-bearing contract rules (see "Running the tests")
 ```
 
 ### The nine criteria
@@ -361,6 +361,13 @@ broader fuzzy match would fix that at the cost of risking the opposite,
 worse failure this whole mechanism exists to prevent. See
 `_normalize_for_match`'s docstring for the full reasoning.
 
+Every discard (and every other thing the validator changed — a downgrade,
+a rejected cause_code) is recorded in `Judgement.validator_notes`, and
+`scan`/`evaluate`'s `--output` report carries it per agent — the only way
+today to actually find out how often this fires against real data: grep a
+real `--backend live` run's report for `"discarded as fabricated"` rather
+than guessing at the rate.
+
 ### Two judge backends, one validator
 
 `LiveJudgeBackend` calls the real Anthropic API (needs `ANTHROPIC_API_KEY`).
@@ -435,7 +442,7 @@ pip install -r requirements.txt
 pytest
 ```
 
-54 tests covering the load-bearing contract rules — evidence enforcement
+56 tests covering the load-bearing contract rules — evidence enforcement
 (including the fabricated-quote check and the normalization that keeps a
 cosmetically-reworded real quote from being wrongly discarded as one — see
 "Evidence is enforced, not requested"), the recipe-mapping-owns-
@@ -443,8 +450,8 @@ classification rule, all four router branches, the forced-flag rule, a
 regression guard on the golden set (cheap-pass recall and precision must
 stay perfect; the two required false-positive traps must keep resolving to
 healthy), retry/backoff and per-agent isolation on the fetch and judge
-tiers, real concurrency in the bounded fetch pool, and the judge-result
-cache's hit/miss behavior.
+tiers, real concurrency in the bounded fetch pool, the judge-result cache's
+hit/miss behavior, and that `--output` actually carries `validator_notes`.
 
 ### With your own ElevenLabs workspace
 
