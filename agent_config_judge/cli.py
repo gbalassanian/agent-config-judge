@@ -129,6 +129,15 @@ def cmd_scan(args: argparse.Namespace) -> None:
                     "action": r.routing.action.value,
                     "requires_human_approval": r.routing.requires_human_approval,
                     "detail": r.routing.detail,
+                    # What the validator changed or discarded and why (e.g. a
+                    # citation that didn't survive the verbatim-in-transcript
+                    # check) — empty when the cheap pass never sent this
+                    # agent to the judge at all. Surfaced here specifically
+                    # so a real --backend live run can be grepped for
+                    # "discarded as fabricated" across a whole scan, instead
+                    # of needing custom code to inspect Judgement objects —
+                    # see "Evidence is enforced, not requested" in the README.
+                    "validator_notes": list(r.judgement.validator_notes) if r.judgement else [],
                 }
                 for r in results
             ],
@@ -197,6 +206,7 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
             "action": result.routing.action.value,
             "requires_human_approval": result.routing.requires_human_approval,
             "detail": result.routing.detail,
+            "validator_notes": list(result.judgement.validator_notes) if result.judgement else [],
         }
         Path(args.output).parent.mkdir(parents=True, exist_ok=True)
         Path(args.output).write_text(json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")
