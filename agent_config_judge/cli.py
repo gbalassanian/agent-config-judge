@@ -83,6 +83,14 @@ def _build_judge_backend(args: argparse.Namespace) -> JudgeBackend:
             sys.exit(1)
         backend = RecordedJudgeBackend(fixture_path=str(fixture))
 
+    # Ensemble wraps the raw backend, not the other way around: it's the
+    # thing worth caching (the confirmed-clean-or-found-something answer),
+    # so the cache sits outermost and stores its output, not per-attempt
+    # raw calls.
+    if getattr(args, "ensemble_max_extra_runs", 0):
+        from agent_config_judge.judge_ensemble import EnsembleJudgeBackend
+        backend = EnsembleJudgeBackend(backend=backend, max_extra_runs=args.ensemble_max_extra_runs)
+
     if args.judge_cache:
         from agent_config_judge.judge_cache import CachedJudgeBackend
         backend = CachedJudgeBackend(backend=backend, cache_path=Path(args.judge_cache))
@@ -376,6 +384,15 @@ def main(argv: list[str] | None = None) -> int:
              "Off by default: omit this flag to always call the judge fresh, exactly today's "
              "behavior.",
     )
+    p_scan.add_argument(
+        "--ensemble-max-extra-runs", type=int, default=0,
+        help="Re-confirm a 'no failures found' judge read before trusting it: if the first call "
+             "already finds a real (evidence-validated) failure, it's returned as-is; only a "
+             "clean read triggers up to this many additional live calls, stopping the moment any "
+             "one finds something — see judge_ensemble.py for why 'healthy' specifically is worth "
+             "the extra spend. 0 (default) disables this — every agent gets exactly one call, "
+             "today's behavior. backend=live only (recorded replays are deterministic already).",
+    )
     p_scan.set_defaults(func=cmd_scan)
 
     p_eval = sub.add_parser(
@@ -396,6 +413,11 @@ def main(argv: list[str] | None = None) -> int:
     p_eval.add_argument("--fixture", help="Recorded-judgements JSON file (backend=recorded only).")
     p_eval.add_argument("--model", default="claude-sonnet-5", help="Model id (backend=live only).")
     p_eval.add_argument("--judge-cache", help="Same judge-result cache as scan — see judge_cache.py.")
+    p_eval.add_argument(
+        "--ensemble-max-extra-runs", type=int, default=0,
+        help="Same re-confirm-a-clean-read ensemble as scan — see judge_ensemble.py. 0 (default) "
+             "disables it.",
+    )
     p_eval.add_argument(
         "--force-judge", action="store_true",
         help="Run the judge even if the cheap pass didn't flag this agent — a deliberate, visible "
