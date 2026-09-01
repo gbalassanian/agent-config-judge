@@ -709,6 +709,30 @@ ElevenLabs' real rate limits, because that requires traffic at a volume
 this repo hasn't been run at. Treat it as a starting point to calibrate,
 not a validated number.
 
+## Calibration backlog: what real production data would let us fix
+
+Every row below is the same shape: a number or a design decision that's
+either an explicit placeholder or a judgment call made without the data
+that would actually justify it, plus the specific real-world measurement
+that would replace the guess with a validated choice — never a bigger
+guess dressed up as a fix. Nothing here gets touched without that data
+first; see "Limitations" for why each one is a placeholder in more detail.
+
+| # | What | Today | What real data would fix it | Where that data comes from |
+|---|------|-------|------------------------------|------------------------------|
+| 1 | `FLAG_SCORE_THRESHOLD` (`cheap_pass.py`) | 85 | Whether 85 is the right cutoff for real recall/precision, not just the golden set's | Run the eval harness against a labeled portfolio at real volume; the file's own docstring says recalibrate if the false-positive rate crosses 30% |
+| 2 | The six rate-based fail thresholds (`GROUNDING_UNSOURCED_FAIL_RATE`, `ESCALATION_RATE_CEILING`, `REPEAT_QUESTION_FAIL_RATE`, `NEGATIVE_SENTIMENT_FAIL_RATE`, `NEGATIVE_SENTIMENT_LABEL_FAIL_RATE`, `LATENCY_OVER_BAND_FAIL_RATE`) | 0.5 / 0.6 / 0.2 / 0.25 / 0.25 / 0.3 | Whether each rate actually separates healthy from broken agents at real volume, or just happens to work on 19 hand-built cases | Same labeled-portfolio-at-scale run as #1 |
+| 3 | `MIN_CONVERSATIONS_FOR_RATE_VERDICT` / `MIN_TURNS_FOR_RATE_VERDICT` | 2 each | These only rule out the single-sample degenerate case (n=1 can only read 0%/100%) — never tuned against how much noise remains at n=2 vs. higher | Real per-agent conversation volume + how much a rate verdict actually flips across daily re-scans at each sample size |
+| 4 | `LATENCY_BAND_MS_BY_CHANNEL` | Flat 1200/1800/2000/2500ms by channel family | Real observed TTFB percentiles per channel | Already has a calibration script (`scripts/calibrate_latency_bands.py`) — just needs ≥30 real samples per channel; today's shipped fixture reports "insufficient data" for all of them |
+| 5 | `ARR_HIGH_THRESHOLD_USD` (`router.py`) | $50,000 | The dollar line where a systemic failure justifies pulling in an engineer vs. sending nearest-guidance | Input from whoever owns real account economics — explicitly not this detector's call to make alone |
+| 6 | `--max-workers` default (`cli.py`) | 5 | The actual concurrency ElevenLabs' API tolerates before rate-limiting | Real traffic at real volume against the live API |
+| 7 | `--sample-size` default (`cli.py`) | 20 conversations | A principled N, derived from (a) real judge input-token cost per conversation and (b) an explicitly declared target detection confidence, via the binomial math discussed above ("¿cuántas conversaciones...") — not a round number | Real per-conversation token counts from live judge calls, current model pricing, and a business-declared "catch X% of failures with Y% confidence" target |
+| 8 | The judge cache's fingerprint granularity (`judge_cache.py`) | One fingerprint over config + conversations combined — any change to either forces a full re-judge | Whether splitting it (reuse a cached verdict for genuinely config-only criteria even when the conversation sample shifts) is safe for *any* criterion without reintroducing the config-passes-but-breaks-at-runtime blind spot the judge tier exists to catch | Which `cause_code`s actually recur on high-volume flagged agents, and whether those specific criteria ever have a transcript-only failure mode (today, likely only `system_prompt` is safe — see "¿y esta bien que el cache sea en base a esto?" above) |
+| 9 | Evidence-quote discard rate, post-normalization (`judge.py`) | Unknown — `validator_notes` now ships in `--output` (see "Ahh ok, y a para no me quedo claro...") but nothing has counted it against real usage yet | Whether the residual "discarded as fabricated" rate is dominated by genuine paraphrase (worth building the turn-index-citation fix discussed above) or genuine altered facts (correctly rejected, nothing to fix) | Grep real `--backend live` reports for `"discarded as fabricated"` and manually read a sample of the flagged quotes against their real transcripts |
+| 10 | Self-serve fix time-to-resolution | Unknown | How long a `self_serve_fix` recommendation typically sits before a customer applies it (i.e. before the agent's fingerprint actually changes) — bounds how much the judge cache's repeated re-diagnosis on an unfixed, high-volume agent actually costs in practice | Track, per agent, the gap between "a self-serve recommendation was generated" and "the fingerprint next changed," once this runs against real customers |
+| 11 | Whether a 10th rubric criterion is needed (`rubric.py`) | Nine, chosen from real cases found while building this — see "Healthy is a defined scope" | A recurring gap the nine don't name | Three sources, none of them guesswork: a human periodically reading the judge's free-text `notes` field, real customer complaints about an agent this tool already called healthy, or occasional blind manual review of raw transcripts |
+| 12 | The eval numbers in "Eval results" | 100% across the board, on a golden set labeled by the same person who wrote the judge prompt | A real accuracy number, not a circularity artifact | A blind human labeler — someone who has never seen `rubric.py` — labeling a sample of real transcripts independently, compared against the judge's own read of the same data |
+
 ## Limitations, weakest first
 
 **"Healthy" is a defined scope, not an absolute claim, and that's worth
