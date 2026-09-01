@@ -240,6 +240,23 @@ flowchart TD
     Systemic -- "low/unknown ARR" --> Nearest["nearest_guidance<br/>+ logs a RecipeGap"]
 ```
 
+**A quick reference for what "Validate" and "Classify" above actually do with
+each criterion's verdict, cause, and evidence, per criterion:**
+
+- **Evidence doesn't survive verification** (fabricated quote, or no quote/config
+  field at all) → verdict downgraded to `unknown` — doesn't reach the cause_code
+  check below at all, and doesn't count as a failure.
+- **Evidence is real, verdict stays `fail`, but the cause doesn't map cleanly** —
+  three distinct ways this happens: no `cause_code` given; a `cause_code` that
+  doesn't exist in `rubric.RECIPE_CATALOG`; or one that exists but is filed
+  under a *different* criterion than the one that failed. All three land the
+  same way: that failure keeps its `fail` verdict but gets no recipe
+  (`recipe = None`) — which alone is enough to push the *whole agent* to
+  `systemic`, regardless of how many other failures on it do have a known fix.
+- **Evidence is real, verdict stays `fail`, and the cause_code is correctly
+  catalogued under its own criterion** → the recipe is trusted, and this
+  failure counts toward `standard`.
+
 And which file owns which piece of that:
 
 ```
