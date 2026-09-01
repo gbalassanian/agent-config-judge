@@ -211,6 +211,17 @@ separate scoring logic.
 
 ## Architecture
 
+**The daily production flow this is built for** (still the plan today — see
+"Path to scale" and "Calibration backlog" — not an active schedule): the
+cheap pass runs over the whole portfolio every day, free, no exceptions. Of
+whatever it flags, an agent whose config *and* sampled conversations are
+byte-identical to the last time it was judged reuses that cached verdict —
+no new judge call, no new cost. A brand-new agent, one whose config
+changed, or one whose conversation sample picked up anything new since
+last time gets a fresh judge call, and the cache updates for next time. An
+agent the cheap pass doesn't flag never reaches this question at all — the
+cache and the judge are invisible to it.
+
 The mechanism itself — what actually happens to one agent, end to end:
 
 ```mermaid
