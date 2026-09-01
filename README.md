@@ -33,8 +33,9 @@ actually broken is to read what happened when a real user hit the specific
 edge the config silently fails on — and nobody reads every transcript across
 hundreds of accounts.
 
-This repo is a working answer to that, built as a case study against my own
-ElevenLabs workspace, not synthetic examples pretending to be one. Two tiers:
+This repo is a working answer to that, built as a worked example against my
+own ElevenLabs workspace, not synthetic examples pretending to be one. Two
+tiers:
 
 1. **Cheap pass** — proxy signals score every agent in the portfolio. No
    transcripts read, no LLM called. Its only job is deciding who gets read in
@@ -119,8 +120,8 @@ transfer calls at this moment..." — but the user's actual request (a human,
 for a pricing question) was never met. **Every config check on this agent
 passes.** `transfer_to_number` is a real, valid, fully-configured tool. The
 only place this failure is visible is the transcript, on the exact channel
-this agent runs on. This is not a hypothetical from the case study brief —
-it's this repo's own portfolio, and it's why the judge tier exists at all:
+this agent runs on. This isn't a hypothetical example — it's this repo's
+own portfolio, and it's why the judge tier exists at all:
 *a tool being configured is not the same as a tool that works.*
 
 (Full parsed evidence, redacted only for phone numbers, is in
