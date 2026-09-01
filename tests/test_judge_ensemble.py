@@ -101,6 +101,20 @@ def test_all_attempts_clean_returns_healthy_after_using_the_full_budget():
     assert validated.failures == []
 
 
+def test_prints_attempt_count_and_outcome_to_stderr(capsys):
+    inner = _SequenceBackend([
+        _all_pass(),
+        _with_fail("knowledge_base", evidence_config_field="knowledge_base_ids", cause_code="kb_not_connected"),
+    ])
+    backend = EnsembleJudgeBackend(backend=inner, max_extra_runs=2)
+
+    backend.judge(_config(), _conversations())
+
+    err = capsys.readouterr().err
+    assert "used 2/3 attempt(s)" in err
+    assert "found a real failure" in err
+
+
 def test_max_extra_runs_zero_behaves_like_no_ensemble():
     inner = _SequenceBackend([_all_pass()])
     backend = EnsembleJudgeBackend(backend=inner, max_extra_runs=0)

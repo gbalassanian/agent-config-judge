@@ -25,6 +25,7 @@ attempts.
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -87,13 +88,29 @@ class EnsembleJudgeBackend:
     max_extra_runs: int = 2
 
     def judge(self, config: AgentConfigSnapshot, conversations: tuple[ConversationRecord, ...]) -> dict[str, Any]:
+        budget = 1 + max(self.max_extra_runs, 0)
         attempts: list[dict[str, Any]] = []
-        for _ in range(1 + max(self.max_extra_runs, 0)):
+        found = False
+        for _ in range(budget):
             raw = self.backend.judge(config, conversations)
             attempts.append(raw)
             validated = validate_judge_output(raw, agent_id=config.agent_id, conversations=conversations)
             if validated.failures:
+                found = True
                 break
+
+        # Visible on purpose: the whole point of this backend is a decision
+        # ("how many times did we actually have to ask before trusting this
+        # read?") that a cost line on an Anthropic invoice can't answer by
+        # itself — see the conversation that led to this. stderr, not
+        # stdout, so it never gets mixed into --output's JSON or into a
+        # test capturing normal print() output.
+        outcome = "found a real failure" if found else "still clean after full budget"
+        print(
+            f"  [ensemble] {config.agent_id}: used {len(attempts)}/{budget} attempt(s) ({outcome})",
+            file=sys.stderr,
+        )
+
         return _merge(attempts, config, conversations)
 
 
