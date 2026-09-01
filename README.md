@@ -267,6 +267,8 @@ agent_config_judge/
   judge.py               tier 2: prompt, strict JSON contract, evidence-enforcing validator
   judge_cache.py         skips a real judge call when nothing it would read has changed
                          since the last cached run for that agent_id (opt-in, --judge-cache)
+  judge_ensemble.py      re-confirms a "no failures found" read before trusting it (opt-in,
+                         --ensemble-max-extra-runs) — see "A third judge backend" below
   router.py              classification x ARR -> exactly one action
   elevenlabs_client.py   real Agents API client + mechanical metrics derivation
   pipeline.py            wires the three tiers together
@@ -284,7 +286,7 @@ scripts/
                                      never auto-applies them (see "Limitations")
   redact_snapshot.py                strips real system prompts, tool endpoints, and conversation
                                      text from a fetched snapshot before it's ever committed anywhere
-tests/                            56 tests on the load-bearing contract rules (see "Running the tests")
+tests/                            63 tests on the load-bearing contract rules (see "Running the tests")
 ```
 
 ### The nine criteria
@@ -406,6 +408,65 @@ the eval stays reproducible when the rubric or the recipe catalog change:
 re-run against the same saved evidence and get a genuinely re-derived
 classification.
 
+### A third judge backend: confirming a clean read before trusting it
+
+Running the live backend for real, for the first time, surfaced something
+the eval harness above can't: the exact same agent — identical config,
+identical sampled conversations, `--backend live` — judged four separate
+times, came back "healthy" once and found a real, evidence-validated
+failure (a missing handoff tool, cited against a real config field, not a
+fabricated quote) the other three. One in four single-call misses, on a
+criterion that isn't even a subtle one to spot.
+
+That asymmetry matters more than the raw rate: an agent the judge flags
+with a real failure reaches a human anyway (self_serve_fix, targeted_nudge,
+escalate — see the router), so missing one *additional* failure on it is
+low-stakes. An agent the judge calls "healthy" reaches no one. A "healthy"
+verdict gets exactly one chance to be wrong and nothing downstream ever
+asks again — the daily-refresh judge cache (see "The daily production flow"
+above) would happily carry that wrong "healthy" forward indefinitely, since
+nothing about a false "healthy" changes the fingerprint that would trigger
+a re-check.
+
+`agent_config_judge/judge_ensemble.py`'s `EnsembleJudgeBackend` addresses
+exactly that gap, spending extra live calls only where they're worth it:
+
+- Calls the wrapped backend once. If that call already has a real
+  validated failure, returns it as-is — no extra spend on the common case
+  that already found something to route.
+- Only a clean read triggers more calls, up to `--ensemble-max-extra-runs`,
+  stopping the moment any attempt finds something real.
+- "Found something real" always means it survived the exact same
+  `validate_judge_output()` every call goes through — a fabricated or
+  unverifiable citation never short-circuits the confirmation runs (a
+  regression test locks this down specifically, since it's the one detail
+  that would have quietly defeated the whole mechanism).
+- Merges per-criterion: whichever attempt first validates a fail for a
+  given criterion contributes its own evidence for that criterion; every
+  other criterion falls back to the first attempt.
+- Off by default (`--ensemble-max-extra-runs 0`), same as `--judge-cache`
+  and `--force-judge` — nothing here changes cost or behavior without an
+  explicit ask. Cache wraps the ensemble, not the other way around: the
+  cache should store the confirmed answer, not per-attempt raw calls.
+- Prints attempt count and outcome to stderr per agent (e.g.
+  `[ensemble] agent_1101...: used 1/3 attempt(s) (found a real failure)`),
+  so it's never necessary to infer how many live calls actually happened
+  from the Anthropic bill.
+
+**`--ensemble-max-extra-runs 2` is today's pick, not a calibrated number** —
+see calibration backlog row #13. It comes from that single 1-in-4 anecdote
+and the diminishing-returns arithmetic that follows from assuming each call
+is an independent roll (unvalidated): 1 confirmation cuts the odds every
+attempt misses from ~25% to ~6%, 2 cuts it further to ~2%, past which more
+calls buy little for their linear cost. Nothing here actually verifies that
+independence assumption — the miss could just as easily be a reproducible
+blind spot on a specific evidence shape, which more calls would never fix.
+Distinguishing "unlucky roll" from "real blind spot" needs the same kind of
+measurement everything else in this README insists on before trusting a
+number: a repeatability eval (run the judge N times per golden-set case,
+live, and measure actual agreement) rather than one afternoon's manual
+testing — not yet built.
+
 ### Extra context the judge gets that the cheap pass doesn't
 
 `judge.build_judge_prompt()` includes two fields the cheap pass never
@@ -470,7 +531,7 @@ pip install -r requirements.txt
 pytest
 ```
 
-56 tests covering the load-bearing contract rules — evidence enforcement
+63 tests covering the load-bearing contract rules — evidence enforcement
 (including the fabricated-quote check and the normalization that keeps a
 cosmetically-reworded real quote from being wrongly discarded as one — see
 "Evidence is enforced, not requested"), the recipe-mapping-owns-
@@ -479,7 +540,11 @@ regression guard on the golden set (cheap-pass recall and precision must
 stay perfect; the two required false-positive traps must keep resolving to
 healthy), retry/backoff and per-agent isolation on the fetch and judge
 tiers, real concurrency in the bounded fetch pool, the judge-result cache's
-hit/miss behavior, and that `--output` actually carries `validator_notes`.
+hit/miss behavior, that `--output` actually carries `validator_notes`, and
+the judge ensemble's short-circuit/confirm/merge behavior — including the
+case that almost got that one wrong: a fail claim with no evidence that
+survives verification must not falsely short-circuit confirmation just
+because its raw verdict says "fail" (see "A third judge backend" below).
 
 ### With your own ElevenLabs workspace
 
@@ -523,9 +588,11 @@ entry point needs:
   instead of fetching live, for testing/demos with no `ELEVENLABS_API_KEY`
   needed (e.g. `--snapshot fixtures/real_portfolio_snapshot.json`).
 
-Same `--backend`, `--fixture`, `--model`, and `--judge-cache` flags as
-`scan` — including the cache, so checking the same unchanged agent twice
-in a row doesn't pay for the judge twice either.
+Same `--backend`, `--fixture`, `--model`, `--judge-cache`, and
+`--ensemble-max-extra-runs` flags as `scan` — including the cache, so
+checking the same unchanged agent twice in a row doesn't pay for the judge
+twice either, and the ensemble (see "A third judge backend" above), so an
+on-demand check can also confirm a clean read before trusting it.
 
 ### Full pipeline with both real keys
 
@@ -613,7 +680,7 @@ of 16 correctly-identified mapped failures, cause_code matched ground truth in 1
 
 Everything above runs against one workspace, on demand, with one API key
 typed into `.env`. Running this from inside ElevenLabs — one scan across
-every customer workspace, on a schedule — changes five things, in order of
+every customer workspace, on a schedule — changes six things, in order of
 how much they'd actually cost to build:
 
 1. **Access is the real blocker, not detection.** ElevenLabs' Agents API is
@@ -717,6 +784,10 @@ now, not just described here:
 - `agent_config_judge/judge_cache.py`'s `CachedJudgeBackend` (`--judge-cache`
   on `agentjudge scan`) skips a real judge call when an agent's config +
   conversation sample fingerprint hasn't changed since the last cached run.
+- `agent_config_judge/judge_ensemble.py`'s `EnsembleJudgeBackend`
+  (`--ensemble-max-extra-runs`) re-confirms a "no failures found" read with
+  extra live calls before trusting it, stopping the moment any one finds a
+  real failure — see "A third judge backend" above.
 
 What's still exactly as described above and NOT built: fanning fetches out
 *across* workspaces (today's concurrency is bounded within one workspace's
@@ -798,6 +869,7 @@ first; see "Limitations" for why each one is a placeholder in more detail.
 | 10 | Self-serve fix time-to-resolution | Unknown | How long a `self_serve_fix` recommendation typically sits before a customer applies it (i.e. before the agent's fingerprint actually changes) — bounds how much the judge cache's repeated re-diagnosis on an unfixed, high-volume agent actually costs in practice | Track, per agent, the gap between "a self-serve recommendation was generated" and "the fingerprint next changed," once this runs against real customers |
 | 11 | Whether a 10th rubric criterion is needed (`rubric.py`) | Nine, chosen from real cases found while building this — see "Healthy is a defined scope" | A recurring gap the nine don't name | Three sources, none of them guesswork: a human periodically reading the judge's free-text `notes` field, real customer complaints about an agent this tool already called healthy, or occasional blind manual review of raw transcripts |
 | 12 | The eval numbers in "Eval results" | 100% across the board, on a golden set labeled by the same person who wrote the judge prompt | A real accuracy number, not a circularity artifact | A blind human labeler — someone who has never seen `rubric.py` — labeling a sample of real transcripts independently, compared against the judge's own read of the same data |
+| 13 | `EnsembleJudgeBackend`'s `max_extra_runs` default (`judge_ensemble.py`, `--ensemble-max-extra-runs`) | 2 | Whether 2 is the right number of confirmation calls, or whether the ~25% single-call miss rate it's based on even generalizes past the one case it was measured on | A repeatability eval — run the judge N times per golden-set case, live, and measure actual agreement — not yet built (see "A third judge backend" above); real per-criterion miss rates would also tell us whether a fixed N should vary by criterion |
 
 ## Limitations, weakest first
 
@@ -885,7 +957,16 @@ a hunch.
    judge reasons past this correctly per-case, but the rubric text itself
    hasn't been updated to say "KB or tool call," which is what it actually
    means in practice.
-9. **No live-write path exists, and none should be added lightly.** Every
+9. **A single live judge call is not fully deterministic, and the mitigation
+   for it is opt-in, not automatic.** The same agent, identical input,
+   judged four separate times live, missed a real failure once (see "A
+   third judge backend" above) — a small, single-case anecdote, but a real
+   one, not a hypothetical. `EnsembleJudgeBackend` exists to reduce that
+   risk, but it only runs when `--ensemble-max-extra-runs` is explicitly
+   passed; the daily-refresh flow described above, and a plain `scan`/
+   `evaluate` call, still take a single judge read at face value unless
+   asked to do otherwise.
+10. **No live-write path exists, and none should be added lightly.** Every
    router action today produces an artifact for a human or customer to act
    on; `RouteAction.touches_live_agent` is `False` everywhere. That keeps
    `requires_human_approval` vacuously true-when-it-matters rather than
