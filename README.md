@@ -270,7 +270,9 @@ agent_config_judge/
   cheap_pass.py          tier 1: proxy scorer over config + aggregate metrics only
   judge.py               tier 2: prompt, strict JSON contract, evidence-enforcing validator
   judge_cache.py         skips a real judge call when nothing it would read has changed
-                         since the last cached run for that agent_id (opt-in, --judge-cache)
+                         since the last cached run for that agent_id (opt-in, --judge-cache);
+                         also expires a cached "healthy" after N days regardless (opt-in,
+                         --judge-cache-healthy-ttl-days)
   judge_ensemble.py      re-confirms a "no failures found" read before trusting it (opt-in,
                          --ensemble-max-extra-runs) — see "A third judge backend" below
   router.py              classification x ARR -> exactly one action
@@ -290,7 +292,7 @@ scripts/
                                      never auto-applies them (see "Limitations")
   redact_snapshot.py                strips real system prompts, tool endpoints, and conversation
                                      text from a fetched snapshot before it's ever committed anywhere
-tests/                            63 tests on the load-bearing contract rules (see "Running the tests")
+tests/                            70 tests on the load-bearing contract rules (see "Running the tests")
 ```
 
 ### The nine criteria
@@ -566,7 +568,7 @@ pip install -r requirements.txt
 pytest
 ```
 
-63 tests covering the load-bearing contract rules — evidence enforcement
+70 tests covering the load-bearing contract rules — evidence enforcement
 (including the fabricated-quote check and the normalization that keeps a
 cosmetically-reworded real quote from being wrongly discarded as one — see
 "Evidence is enforced, not requested"), the recipe-mapping-owns-
@@ -575,9 +577,12 @@ regression guard on the golden set (cheap-pass recall and precision must
 stay perfect; the two required false-positive traps must keep resolving to
 healthy), retry/backoff and per-agent isolation on the fetch and judge
 tiers, real concurrency in the bounded fetch pool, the judge-result cache's
-hit/miss behavior, that `--output` actually carries `validator_notes`, and
-the judge ensemble's short-circuit/confirm/merge behavior — including the
-case that almost got that one wrong: a fail claim with no evidence that
+hit/miss behavior (including `healthy_ttl_days`: a young "healthy" cache
+entry stays a hit, an old one forces a real re-judge, a real failure never
+expires this way, and a legacy entry with no `judged_at` isn't punished for
+predating the field), that `--output` actually carries `validator_notes`,
+and the judge ensemble's short-circuit/confirm/merge behavior — including
+the case that almost got that one wrong: a fail claim with no evidence that
 survives verification must not falsely short-circuit confirmation just
 because its raw verdict says "fail" (see "A third judge backend" below).
 
@@ -623,11 +628,13 @@ entry point needs:
   instead of fetching live, for testing/demos with no `ELEVENLABS_API_KEY`
   needed (e.g. `--snapshot fixtures/real_portfolio_snapshot.json`).
 
-Same `--backend`, `--fixture`, `--model`, `--judge-cache`, and
-`--ensemble-max-extra-runs` flags as `scan` — including the cache, so
-checking the same unchanged agent twice in a row doesn't pay for the judge
-twice either, and the ensemble (see "A third judge backend" above), so an
-on-demand check can also confirm a clean read before trusting it.
+Same `--backend`, `--fixture`, `--model`, `--judge-cache`,
+`--judge-cache-healthy-ttl-days`, and `--ensemble-max-extra-runs` flags as
+`scan` — including the cache, so checking the same unchanged agent twice
+in a row doesn't pay for the judge twice either, its healthy-verdict TTL
+(see "Path to scale" point 4 above), and the ensemble (see "A third judge
+backend" above), so an on-demand check can also confirm a clean read
+before trusting it.
 
 ### Full pipeline with both real keys
 
@@ -764,6 +771,19 @@ how much they'd actually cost to build:
    a real store — fine for one workspace's portfolio, not for a fleet of
    concurrent scans writing to it (see the module's own docstring on
    why it isn't thread-safe as written).
+
+   One gap in "unchanged fingerprint = still correct" specifically:
+   nothing changing can also mean an agent has had zero new conversations
+   in months, and a cached "healthy" from a single unlucky judge call (see
+   "A third judge backend" above) could then sit wrong indefinitely — no
+   new conversation ever arrives to invalidate it. `--judge-cache-healthy-
+   ttl-days N` closes that: a cached "healthy" older than N days is
+   re-judged regardless of the fingerprint; a cached real failure never
+   expires this way, since that agent already has a human looking at it
+   via the router. Off by default, same as everything else opt-in here.
+   The cache also now records how many attempts (`ensemble_attempts`)
+   backed each cached verdict — not used to vary the TTL yet, but the
+   data a future version would need to (see calibration backlog row #15).
 5. **Multi-tenant means real isolation, not just a loop over workspaces.**
    Each workspace's API key is a secret belonging to that customer and
    must be stored/rotated per-tenant (a secrets manager, not a shared
@@ -818,7 +838,9 @@ now, not just described here:
   instead of crashing the whole scan (see `pipeline.py`).
 - `agent_config_judge/judge_cache.py`'s `CachedJudgeBackend` (`--judge-cache`
   on `agentjudge scan`) skips a real judge call when an agent's config +
-  conversation sample fingerprint hasn't changed since the last cached run.
+  conversation sample fingerprint hasn't changed since the last cached run,
+  and (`--judge-cache-healthy-ttl-days`) forces a cached "healthy" to
+  re-judge once it's older than N days regardless of the fingerprint.
 - `agent_config_judge/judge_ensemble.py`'s `EnsembleJudgeBackend`
   (`--ensemble-max-extra-runs`) re-confirms a "no failures found" read with
   extra live calls before trusting it, stopping the moment any one finds a
@@ -906,6 +928,7 @@ first; see "Limitations" for why each one is a placeholder in more detail.
 | 12 | The eval numbers in "Eval results" | 100% across the board, on a golden set labeled by the same person who wrote the judge prompt | A real accuracy number, not a circularity artifact | A blind human labeler — someone who has never seen `rubric.py` — labeling a sample of real transcripts independently, compared against the judge's own read of the same data |
 | 13 | `EnsembleJudgeBackend`'s `max_extra_runs` default (`judge_ensemble.py`, `--ensemble-max-extra-runs`) | 2 | Whether 2 is the right number of confirmation calls, or whether the ~25% single-call miss rate it's based on even generalizes past the one case it was measured on | A repeatability eval — run the judge N times per golden-set case, live, and measure actual agreement — not yet built (see "A third judge backend" above); real per-criterion miss rates would also tell us whether a fixed N should vary by criterion |
 | 14 | `LiveJudgeBackend.max_tokens` (`judge.py`) | 16000 | Whether 16000 has real headroom to spare or is closer to the real ceiling this rubric's prompt + adaptive-thinking spend needs — found empirically that 4096 wasn't enough (see "Two judge backends, one validator" above), never measured where the actual line sits | Real thinking + output token counts logged across many live judge calls at this prompt's typical length, and again if a longer conversation sample ever gets judged in one call |
+| 15 | `CachedJudgeBackend.healthy_ttl_days` (`judge_cache.py`, `--judge-cache-healthy-ttl-days`) | Off by default; 30 is the value discussed as a starting point | Whether a cached "healthy" verdict's true risk should vary by how many ensemble attempts backed it (`ensemble_attempts`, already recorded per cache entry but not yet used) — a verdict that survived 3 confirmations is plausibly safe for longer than one that survived only 1, but nothing here has real data to back a specific ratio | Once this runs long enough to accumulate cache history: how often a dormant agent's cached "healthy" flips to a real failure on its first post-TTL re-judge, split by how many attempts originally backed it |
 
 ## Limitations, weakest first
 
@@ -1001,7 +1024,11 @@ a hunch.
    risk, but it only runs when `--ensemble-max-extra-runs` is explicitly
    passed; the daily-refresh flow described above, and a plain `scan`/
    `evaluate` call, still take a single judge read at face value unless
-   asked to do otherwise.
+   asked to do otherwise. The related, separate gap — a wrong "healthy"
+   that nothing ever re-checks because the agent stopped generating new
+   conversations — has the same shape: `--judge-cache-healthy-ttl-days`
+   fixes it, but only when it's explicitly turned on (see "Path to scale"
+   point 4 above).
 10. **No live-write path exists, and none should be added lightly.** Every
    router action today produces an artifact for a human or customer to act
    on; `RouteAction.touches_live_agent` is `False` everywhere. That keeps

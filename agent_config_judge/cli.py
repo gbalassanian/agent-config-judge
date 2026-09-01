@@ -93,7 +93,10 @@ def _build_judge_backend(args: argparse.Namespace) -> JudgeBackend:
 
     if args.judge_cache:
         from agent_config_judge.judge_cache import CachedJudgeBackend
-        backend = CachedJudgeBackend(backend=backend, cache_path=Path(args.judge_cache))
+        backend = CachedJudgeBackend(
+            backend=backend, cache_path=Path(args.judge_cache),
+            healthy_ttl_days=getattr(args, "judge_cache_healthy_ttl_days", None),
+        )
 
     return backend
 
@@ -385,6 +388,14 @@ def main(argv: list[str] | None = None) -> int:
              "behavior.",
     )
     p_scan.add_argument(
+        "--judge-cache-healthy-ttl-days", type=int, default=None,
+        help="Only meaningful with --judge-cache. Force a cached 'healthy' verdict to be re-judged "
+             "once it's older than this many days, even if the fingerprint hasn't changed — closes "
+             "the gap where a dormant agent (no new conversations ever) could carry a wrong "
+             "'healthy' forever. A cached verdict with a real failure never expires this way — see "
+             "judge_cache.py. None (default): no expiry, today's behavior.",
+    )
+    p_scan.add_argument(
         "--ensemble-max-extra-runs", type=int, default=0,
         help="Re-confirm a 'no failures found' judge read before trusting it: if the first call "
              "already finds a real (evidence-validated) failure, it's returned as-is; only a "
@@ -413,6 +424,10 @@ def main(argv: list[str] | None = None) -> int:
     p_eval.add_argument("--fixture", help="Recorded-judgements JSON file (backend=recorded only).")
     p_eval.add_argument("--model", default="claude-sonnet-5", help="Model id (backend=live only).")
     p_eval.add_argument("--judge-cache", help="Same judge-result cache as scan — see judge_cache.py.")
+    p_eval.add_argument(
+        "--judge-cache-healthy-ttl-days", type=int, default=None,
+        help="Same healthy-verdict TTL as scan — see judge_cache.py. None (default) disables it.",
+    )
     p_eval.add_argument(
         "--ensemble-max-extra-runs", type=int, default=0,
         help="Same re-confirm-a-clean-read ensemble as scan — see judge_ensemble.py. 0 (default) "
