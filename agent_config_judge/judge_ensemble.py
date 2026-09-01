@@ -86,6 +86,12 @@ class EnsembleJudgeBackend:
 
     backend: Any  # JudgeBackend — Any to avoid importing the Protocol just for a type hint
     max_extra_runs: int = 2
+    # Per-agent attempt count from the most recent judge() call, keyed by
+    # agent_id — read by CachedJudgeBackend (duck-typed, optional) so a
+    # cached "healthy" can record how many attempts actually backed it,
+    # without JudgeBackend's return contract needing a metadata field just
+    # for this. See judge_cache.py's docstring.
+    last_attempt_counts: dict[str, int] = field(default_factory=dict)
 
     def judge(self, config: AgentConfigSnapshot, conversations: tuple[ConversationRecord, ...]) -> dict[str, Any]:
         budget = 1 + max(self.max_extra_runs, 0)
@@ -98,6 +104,7 @@ class EnsembleJudgeBackend:
             if validated.failures:
                 found = True
                 break
+        self.last_attempt_counts[config.agent_id] = len(attempts)
 
         # Visible on purpose: the whole point of this backend is a decision
         # ("how many times did we actually have to ask before trusting this

@@ -34,6 +34,23 @@ consequence worth naming: this means ARR, the agent's display name outside
 because none of them are part of what gets hashed — not an oversight, the
 same "type signature is the enforcement mechanism" principle cheap_pass.py
 uses (the judge never reads ARR either; see router.py's docstring).
+
+A fingerprint match means "nothing changed" — but "nothing changed" can
+also mean "this agent has had zero new conversations in months," and a
+fingerprint has no opinion on how long that's been true. A "healthy"
+verdict is the one outcome nothing downstream ever double-checks (see
+judge_ensemble.py's docstring for the full reasoning: a flagged agent's
+failures reach a human via the router regardless of a second miss; a
+"healthy" agent reaches no one) — so a dormant agent that got a wrong
+"healthy" once, purely by bad luck on a single judge call, could stay
+wrong indefinitely: no new conversation ever arrives to change the
+fingerprint and force a re-check. `healthy_ttl_days` exists for exactly
+that gap: once a cached "healthy" verdict is older than this many days,
+it's treated as a miss and re-judged, even with an unchanged fingerprint.
+A cached verdict with a real failure never expires this way — that agent
+already has a human looking at it via the router, so re-confirming it on
+a timer buys little and costs a real call every time. Off by default
+(`healthy_ttl_days=None`), same as every other opt-in knob here.
 """
 
 from __future__ import annotations
@@ -41,10 +58,11 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-from agent_config_judge.judge import _format_config, _format_conversations
+from agent_config_judge.judge import _format_config, _format_conversations, validate_judge_output
 from agent_config_judge.models import AgentConfigSnapshot, ConversationRecord
 
 
@@ -70,6 +88,10 @@ class CachedJudgeBackend:
 
     backend: Any  # JudgeBackend — Any to avoid importing the Protocol just for a type hint
     cache_path: Path
+    healthy_ttl_days: int | None = None
+    # Injectable so tests can simulate "30 days later" without waiting 30
+    # days — never override this outside a test.
+    clock: Callable[[], datetime] = field(default=lambda: datetime.now(timezone.utc), repr=False)
     _cache: dict[str, dict[str, Any]] | None = field(default=None, repr=False)
 
     def _load(self) -> dict[str, dict[str, Any]]:
@@ -83,14 +105,46 @@ class CachedJudgeBackend:
         with open(self.cache_path, "w", encoding="utf-8") as f:
             json.dump(cache, f, indent=2, ensure_ascii=False)
 
+    def _is_stale_healthy(
+        self, entry: dict[str, Any], config: AgentConfigSnapshot, conversations: tuple[ConversationRecord, ...]
+    ) -> bool:
+        if self.healthy_ttl_days is None:
+            return False
+        judged_at_str = entry.get("judged_at")
+        if judged_at_str is None:
+            # A cache entry written before this field existed — don't force
+            # an expiry on data that never recorded when it was judged.
+            return False
+        validated = validate_judge_output(entry["raw_judgement"], agent_id=config.agent_id, conversations=conversations)
+        if validated.failures:
+            return False  # a real failure never expires this way — see module docstring
+        age_days = (self.clock() - datetime.fromisoformat(judged_at_str)).total_seconds() / 86400.0
+        return age_days >= self.healthy_ttl_days
+
     def judge(self, config: AgentConfigSnapshot, conversations: tuple[ConversationRecord, ...]) -> dict[str, Any]:
         fingerprint = _fingerprint(config, conversations)
         cache = self._load()
         entry = cache.get(config.agent_id)
-        if entry is not None and entry.get("fingerprint") == fingerprint:
+        if (
+            entry is not None
+            and entry.get("fingerprint") == fingerprint
+            and not self._is_stale_healthy(entry, config, conversations)
+        ):
             return entry["raw_judgement"]
 
         raw = self.backend.judge(config, conversations)
-        cache[config.agent_id] = {"fingerprint": fingerprint, "raw_judgement": raw}
+        # How many live calls actually produced this raw output — 1 unless
+        # the wrapped backend is (or wraps) an EnsembleJudgeBackend, which
+        # tracks it per agent_id. Not used to vary healthy_ttl_days today
+        # (see judge_ensemble.py / README calibration backlog on why not
+        # yet) — recorded so that calibration has real numbers to work from
+        # once there's enough history to look at.
+        ensemble_attempts = getattr(self.backend, "last_attempt_counts", {}).get(config.agent_id, 1)
+        cache[config.agent_id] = {
+            "fingerprint": fingerprint,
+            "raw_judgement": raw,
+            "judged_at": self.clock().isoformat(),
+            "ensemble_attempts": ensemble_attempts,
+        }
         self._save(cache)
         return raw
