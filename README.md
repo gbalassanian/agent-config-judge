@@ -1,14 +1,17 @@
 # agent-config-judge
 
 A two-tier detector for misconfigured ElevenLabs conversational voice agents,
-built to run against a portfolio of accounts rather than one agent at a time.
+built to run against a whole portfolio of accounts, and just as usable
+checking one account on demand.
 
 **In one sentence:** this automates the repeatable, mechanical part of what
-an FDE/Deployment Strategist does to triage an agent — detect a concern,
-confirm it with cited evidence, and recommend an action — while leaving
-explicitly to a human everything that still needs real judgment: a failure
-mode outside what this tool was built to check for (see "Limitations"),
-an ambiguous call, and any actual change to a customer's live agent.
+an Adoption Strategist does across a whole portfolio (`scan`) and what an
+FDE/Deployment Strategist does for one account someone is asking about
+right now (`evaluate`) — detect a concern, confirm it with cited evidence,
+and recommend an action — while leaving explicitly to a human everything
+that still needs real judgment: a failure mode outside what this tool was
+built to check for (see "Limitations"), an ambiguous call, and any actual
+change to a customer's live agent.
 
 **Why this exists:** I built this to demonstrate, end to end, the exact work
 an adoption/deployment-facing role at ElevenLabs actually does — proactively
@@ -398,6 +401,21 @@ today to actually find out how often this fires against real data: grep a
 real `--backend live` run's report for `"discarded as fabricated"` rather
 than guessing at the rate.
 
+The evidence that actually survives isn't buried in that JSON report
+either — plain console output (no `--output` needed) prints it right under
+each named failure, exactly the citation or config field the validator let
+through:
+
+```
+  - human_handoff: handoff_no_transfer_tool
+      evidence (config field): tools
+  - multi_turn: multi_turn_repeats_failed_tool_call
+      evidence (transcript): "Un segundo... Déjame intentar de nuevo."
+```
+
+A fabricated or altered quote never reaches this line — by the time a
+failure prints here, its evidence already passed `validate_judge_output()`.
+
 ### Two judge backends, one validator
 
 `LiveJudgeBackend` calls the real Anthropic API (needs `ANTHROPIC_API_KEY`).
@@ -407,6 +425,22 @@ same `validate_judge_output()` — recorded is not a convenience mock, it's how
 the eval stays reproducible when the rubric or the recipe catalog change:
 re-run against the same saved evidence and get a genuinely re-derived
 classification.
+
+**`LiveJudgeBackend.max_tokens` is 16000, not a small default, for a real
+reason found running it live for the first time.** Current Claude models
+default to adaptive thinking at high effort, and thinking tokens count
+against the same `max_tokens` ceiling as the final JSON answer — on this
+rubric's prompt length (full transcripts + nine criteria to reason
+through), a lower ceiling let the model spend its entire budget thinking
+and return no text at all, which surfaced as an opaque
+`json.JSONDecodeError` with no clue what had actually happened. Two fixes,
+both in `judge.py`: the higher ceiling gives both thinking and the answer
+room to finish, and an empty-text response is now detected before the
+JSON parse and raised as a `JudgeError` naming the real `stop_reason` and
+content block types, so this failure mode is diagnosable directly from the
+error if it ever recurs on a longer prompt. 16000 is generous for prompts
+this size, not a value derived from measuring where the ceiling actually
+needs to sit — see calibration backlog row #14.
 
 ### A third judge backend: confirming a clean read before trusting it
 
@@ -870,6 +904,7 @@ first; see "Limitations" for why each one is a placeholder in more detail.
 | 11 | Whether a 10th rubric criterion is needed (`rubric.py`) | Nine, chosen from real cases found while building this — see "Healthy is a defined scope" | A recurring gap the nine don't name | Three sources, none of them guesswork: a human periodically reading the judge's free-text `notes` field, real customer complaints about an agent this tool already called healthy, or occasional blind manual review of raw transcripts |
 | 12 | The eval numbers in "Eval results" | 100% across the board, on a golden set labeled by the same person who wrote the judge prompt | A real accuracy number, not a circularity artifact | A blind human labeler — someone who has never seen `rubric.py` — labeling a sample of real transcripts independently, compared against the judge's own read of the same data |
 | 13 | `EnsembleJudgeBackend`'s `max_extra_runs` default (`judge_ensemble.py`, `--ensemble-max-extra-runs`) | 2 | Whether 2 is the right number of confirmation calls, or whether the ~25% single-call miss rate it's based on even generalizes past the one case it was measured on | A repeatability eval — run the judge N times per golden-set case, live, and measure actual agreement — not yet built (see "A third judge backend" above); real per-criterion miss rates would also tell us whether a fixed N should vary by criterion |
+| 14 | `LiveJudgeBackend.max_tokens` (`judge.py`) | 16000 | Whether 16000 has real headroom to spare or is closer to the real ceiling this rubric's prompt + adaptive-thinking spend needs — found empirically that 4096 wasn't enough (see "Two judge backends, one validator" above), never measured where the actual line sits | Real thinking + output token counts logged across many live judge calls at this prompt's typical length, and again if a longer conversation sample ever gets judged in one call |
 
 ## Limitations, weakest first
 
