@@ -737,6 +737,44 @@ ElevenLabs' real rate limits, because that requires traffic at a volume
 this repo hasn't been run at. Treat it as a starting point to calibrate,
 not a validated number.
 
+## Beyond this pipeline: where an actual agent could fit
+
+Worth being precise about a distinction first, since the two terms get
+conflated: nothing in this repo is an AI agent. The cheap pass is plain
+code; the judge is a single structured LLM call over a fixed, pre-assembled
+input, with zero say over what it gets to look at, and its output is never
+trusted without a mechanical re-check — the opposite of the autonomy and
+trust an actual agent (open-ended, tool-using, deciding for itself what to
+investigate) would need to be worth the name. That's deliberate: this
+pipeline's whole value is being cheap, deterministic, and auditable for
+routine per-agent triage, and an agent loop would cost more per call,
+cache worse (today's judge cache assumes a fixed, reproducible input), and
+be harder to verify — the wrong trade for a job this repeatable.
+
+An actual agent would fit a different job: not the routine daily triage
+above, but the open-ended investigation this system still hands a human
+for. Two concrete candidates, not built, not scoped further than this:
+
+- **Mining the router's own `RecipeGap` log for new recipe candidates.**
+  Every `systemic` agent with an uncatalogued cause already logs a
+  `RecipeGap` — today nobody reads that backlog automatically. An agent
+  that periodically reviews accumulated gaps across many agents, cross-
+  references their transcripts, and proposes a new `rubric.py` catalog
+  entry (for a human to approve) is a direct answer to "how does a tenth
+  criterion actually get identified" (see "Healthy is a defined scope,"
+  above) — and it's a genuinely open-ended, cross-agent research task,
+  not a fixed rubric applied to a fixed input, which is exactly where an
+  agent's ability to explore earns its extra cost.
+- **An on-demand investigator for the ambiguous cases an FDE gets today.**
+  "My agent behaves oddly sometimes" isn't a 9-criteria check — it's
+  exploratory: read several conversations, cross-reference account
+  history, test and discard hypotheses. An agent with tools (search
+  conversations, query the recipe catalog, pull account history) that
+  does that digging and hands an FDE a formed hypothesis, instead of
+  the FDE doing the digging by hand, is the same shape of value as the
+  first candidate — open-ended investigation an agent is suited for,
+  routine triage that this pipeline already does more cheaply.
+
 ## Calibration backlog: what real production data would let us fix
 
 Every row below is the same shape: a number or a design decision that's
