@@ -59,6 +59,16 @@ def _print_triage_line(result: TriageResult) -> None:
         for c in result.judgement.failures:
             recipe_str = c.recipe.cause_code if c.recipe else "UNMAPPED"
             print(f"      - {c.criterion_id}: {recipe_str}")
+            # Print whichever evidence the validator actually let through —
+            # never both, since a fail always cites exactly one kind (see
+            # judge.py's JUDGE_OUTPUT_CONTRACT). This is the validated
+            # citation, not raw model output: a fabricated/altered quote
+            # never reaches here, it was already discarded upstream and
+            # would show up in validator_notes instead (see --output).
+            if c.evidence_quote:
+                print(f'          evidence (transcript): "{c.evidence_quote}"')
+            elif c.evidence_config_field:
+                print(f"          evidence (config field): {c.evidence_config_field}")
     for gap in result.routing.recipe_gaps:
         print(f"      ! recipe gap: {gap.criterion_id} cause={gap.judge_cause_code!r}")
 

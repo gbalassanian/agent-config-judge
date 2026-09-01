@@ -234,7 +234,16 @@ class LiveJudgeBackend:
     """
 
     model: str = "claude-sonnet-5"
-    max_tokens: int = 4096
+    # 4096 was too low: current models (Sonnet 5 included) default to
+    # adaptive thinking at "high" effort, and thinking tokens count against
+    # this same ceiling as the final JSON answer — on this prompt's length
+    # (full transcripts + a 9-criterion rubric to reason through) the model
+    # can spend the whole budget thinking and stop before writing any
+    # answer at all (see the empty-text check in judge() below, added after
+    # exactly that happened on a live call). 16000 leaves generous room for
+    # both on prompts this size; revisit if a much longer conversation
+    # sample ever gets judged in one call.
+    max_tokens: int = 16000
     max_retries: int = 5
     _client: Any = field(default=None, repr=False)
 
@@ -266,6 +275,24 @@ class LiveJudgeBackend:
             messages=[{"role": "user", "content": prompt}],
         )
         text = "".join(block.text for block in response.content if getattr(block, "type", None) == "text")
+        if not text.strip():
+            # Current models (Sonnet 5 included) default to adaptive thinking
+            # at "high" effort, and thinking tokens count against the same
+            # max_tokens ceiling as the final answer. On a long enough
+            # prompt the model can spend the entire budget thinking and stop
+            # (stop_reason="max_tokens") before emitting any text block at
+            # all — this is not a malformed-JSON case _extract_json_object
+            # is meant to catch, so surface it distinctly with the actual
+            # stop reason and block types instead of a bare JSONDecodeError
+            # that gives no clue what happened.
+            block_types = [getattr(b, "type", "?") for b in response.content]
+            raise JudgeError(
+                f"Judge call returned no text content (stop_reason={response.stop_reason!r}, "
+                f"content block types={block_types}). Likely cause: the model spent the entire "
+                f"max_tokens budget ({self.max_tokens}) on thinking before writing an answer. "
+                f"Raise LiveJudgeBackend.max_tokens (or pass output_config={{'effort': 'medium'}} "
+                f"or lower to reduce thinking spend) and retry."
+            )
         return _extract_json_object(text)
 
 
