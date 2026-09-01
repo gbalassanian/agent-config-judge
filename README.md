@@ -134,11 +134,11 @@ this yourself against the bundled fixtures, zero API keys required):
 
 | Agent | Cheap-pass score | Classification | What's actually wrong |
 |---|---|---|---|
-| Onboarding Assistant | 40.0 (forced) | standard | The case above, plus a system prompt that's just `"Eres un asistente útil"` — long enough to dodge a naive length check, but no bounded role at all |
-| No Borders - Intake | 57.8 | standard | System prompt literally says *"ofrecé pasarlo con una persona"* (offer to hand off to a person) if the customer is upset or the case is complex — but **zero transfer tools are configured anywhere**. This one config check alone catches it; no transcript needed |
-| No Borders - Operations Copilot | 51.1 (forced) | standard | A webhook tool (`crm_lookup`) returned HTTP 401 twice in the same conversation, and the agent retried the *identical* query verbatim before giving up — the live instance of a cause (`multi_turn_repeats_failed_tool_call`) added to the catalog after finding it here |
-| Customer Support Agent | 31.1 | standard | Completely empty: blank system prompt, no tools, no KB, zero conversations ever. A real, unconfigured stub, not a synthetic example |
-| Recruiter Agent | 42.2 | **healthy** | Cheap pass flags missing knowledge_base and human_handoff — but this is a one-user internal recruiting roleplay tool with the full job description and candidate CV embedded directly in the prompt. Neither criterion actually applies, and the judge correctly walks the flag back to healthy |
+| Onboarding Assistant | 37.5 (forced) | standard | The case above, plus a system prompt that's just `"Eres un asistente útil"` — long enough to dodge a naive length check, but no bounded role at all |
+| No Borders - Intake | 57.5 | standard | System prompt literally says *"ofrecé pasarlo con una persona"* (offer to hand off to a person) if the customer is upset or the case is complex — but **zero transfer tools are configured anywhere**. This one config check alone catches it; no transcript needed |
+| No Borders - Operations Copilot | 52.5 (forced) | standard | A webhook tool (`crm_lookup`) returned HTTP 401 twice in the same conversation, and the agent retried the *identical* query verbatim before giving up — the live instance of a cause (`multi_turn_repeats_failed_tool_call`) added to the catalog after finding it here |
+| Customer Support Agent | 30.0 | standard | Completely empty: blank system prompt, no tools, no KB, zero conversations ever. A real, unconfigured stub, not a synthetic example |
+| Recruiter Agent | 42.5 | **healthy** | Cheap pass flags missing knowledge_base and human_handoff — but this is a one-user internal recruiting roleplay tool with the full job description and candidate CV embedded directly in the prompt. Neither criterion actually applies, and the judge correctly walks the flag back to healthy |
 
 The Recruiter Agent row is the one genuinely interesting non-failure: it's a
 live demonstration of the cheap pass's designed-in over-flagging, and of the
