@@ -351,15 +351,24 @@ JUDGEMENTS: dict[str, dict] = {
         "criteria": {
             "system_prompt": crit("pass", field="system_prompt"),
             "knowledge_base": crit("fail", field="knowledge_base_ids", cause="kb_not_connected"),
-            "human_handoff": crit("unknown"),
-            "fallback": crit("pass", quote="I don't have that information available right now."),
+            "human_handoff": crit("fail", field="tools", cause="handoff_no_transfer_tool"),
+            "fallback": crit("fail", quote="Sorry, I don't have access to that either.", cause="fallback_no_escalation_after_unknown"),
             "grounding": crit("unknown"),
             "multi_turn": crit("unknown"),
-            "escalation_health": crit("unknown"),
+            "escalation_health": crit("fail", quote="Sorry, I don't have access to that either.", cause="escalation_rate_zero_with_missed_cases"),
             "sentiment": crit("unknown"),
             "latency": crit("unknown"),
         },
-        "notes": "The prompt promises KB-backed policy answers but no KB is attached; the agent correctly admits it doesn't know rather than guessing (fallback pass), it just can't answer anything in its supposed job at all.",
+        "notes": (
+            "The prompt promises KB-backed policy answers but no KB is attached, so knowledge_base "
+            "fails. tools=() means there is genuinely no handoff path either. The agent correctly "
+            "admits it doesn't know rather than guessing, but fails the customer twice in a row "
+            "and never once attempts to escalate — a real fallback and escalation_health failure, "
+            "not just the one this case was originally built to isolate. "
+            "fallback_no_escalation_after_unknown has no entry in rubric.RECIPE_CATALOG, which is "
+            "what correctly forces this agent to systemic rather than standard — a real recipe "
+            "gap, not a misjudgment."
+        ),
     },
 
     "synthetic_system_prompt_contradiction": {

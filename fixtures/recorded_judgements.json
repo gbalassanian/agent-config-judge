@@ -914,16 +914,16 @@
         "cause_code": "kb_not_connected"
       },
       "human_handoff": {
-        "verdict": "unknown",
+        "verdict": "fail",
         "evidence_quote": null,
-        "evidence_config_field": null,
-        "cause_code": null
+        "evidence_config_field": "tools",
+        "cause_code": "handoff_no_transfer_tool"
       },
       "fallback": {
-        "verdict": "pass",
-        "evidence_quote": "I don't have that information available right now.",
+        "verdict": "fail",
+        "evidence_quote": "Sorry, I don't have access to that either.",
         "evidence_config_field": null,
-        "cause_code": null
+        "cause_code": "fallback_no_escalation_after_unknown"
       },
       "grounding": {
         "verdict": "unknown",
@@ -938,10 +938,10 @@
         "cause_code": null
       },
       "escalation_health": {
-        "verdict": "unknown",
-        "evidence_quote": null,
+        "verdict": "fail",
+        "evidence_quote": "Sorry, I don't have access to that either.",
         "evidence_config_field": null,
-        "cause_code": null
+        "cause_code": "escalation_rate_zero_with_missed_cases"
       },
       "sentiment": {
         "verdict": "unknown",
@@ -956,7 +956,7 @@
         "cause_code": null
       }
     },
-    "notes": "The prompt promises KB-backed policy answers but no KB is attached; the agent correctly admits it doesn't know rather than guessing (fallback pass), it just can't answer anything in its supposed job at all.",
+    "notes": "The prompt promises KB-backed policy answers but no KB is attached, so knowledge_base fails. tools=() means there is genuinely no handoff path either. The agent correctly admits it doesn't know rather than guessing, but fails the customer twice in a row and never once attempts to escalate — a real fallback and escalation_health failure, not just the one this case was originally built to isolate. fallback_no_escalation_after_unknown has no entry in rubric.RECIPE_CATALOG, which is what correctly forces this agent to systemic rather than standard — a real recipe gap, not a misjudgment.",
     "agent_id": "synthetic_kb_missing"
   },
   "synthetic_system_prompt_contradiction": {

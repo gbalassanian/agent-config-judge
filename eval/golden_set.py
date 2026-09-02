@@ -228,25 +228,32 @@ def _synthetic_cases() -> list[GoldenCase]:
 
     # S3 — TRAP: escalation proxy counts zero because escalation happens via a ticket tool.
     #
-    # No knowledge_base_ids, and the closing line no longer promises a
-    # refund or a specific turnaround: a first --backend live run against
-    # the ORIGINAL version of this fixture (kb_ids=("kb_billing",)
+    # No knowledge_base_ids, a prompt scoped to dispute intake (not general
+    # billing Q&A), and a closing line that no longer promises a refund or
+    # a specific turnaround: a first --backend live run against the
+    # ORIGINAL version of this fixture (kb_ids=("kb_billing",)
     # attached-and-never-used, plus "they'll refund the duplicate charge and
     # follow up by email within 1 business day") came back "standard" —
-    # again not a judge bug. kb_connected_but_unused was a correct read (the
-    # KB really was never touched), and grounding_missing_source_attribution
+    # not a judge bug. kb_connected_but_unused was a correct read (the KB
+    # really was never touched), and grounding_missing_source_attribution
     # was arguably correct too: create_support_ticket logs a ticket, it
-    # doesn't confirm a refund or commit to a one-day SLA, so that line was
-    # a real unattributed promise, not the kind of tool-derived claim S2's
-    # order-status line is. Fixed by dropping the incidental KB and
-    # softening the claim to only what logging a ticket actually supports,
-    # so escalation_health stays the one criterion this case is testing.
+    # doesn't confirm a refund or commit to a one-day SLA. Dropping the
+    # incidental KB alone wasn't enough either — a SECOND live run still
+    # failed knowledge_base, this time as kb_not_connected: the prompt said
+    # "you handle billing questions" broadly, and a judge reasonably reads
+    # that as implying policy/pricing questions this transcript never
+    # actually tests, gap or not. Fixed at the root this time: the prompt
+    # now only claims what this agent actually does (log disputes it can't
+    # resolve), so there's no implied KB-backed scope left for
+    # knowledge_base to disagree about; escalation_health stays the one
+    # criterion this case is testing.
     cases.append(GoldenCase(
         snapshot=_snapshot(
             "synthetic_escalation_trap_ticket_tool", "Synthetic: Billing Support Bot",
-            "You handle billing questions. If you can't resolve something yourself, create a "
-            "support ticket for a human to follow up — do not tell the customer you'll "
-            "'transfer' them, since this channel has no live transfer.",
+            "You handle billing dispute reports — charges the customer wants investigated. If "
+            "you can't resolve one yourself, create a support ticket for a human to follow up — "
+            "do not tell the customer you'll 'transfer' them, since this channel has no live "
+            "transfer.",
             tools=(ToolConfig(name="create_support_ticket", tool_type="webhook", detail="https://acme.example/tickets"),),
             kb_ids=(),
             conversations=(ConversationRecord("c1", "widget", (
@@ -260,9 +267,10 @@ def _synthetic_cases() -> list[GoldenCase]:
                 "FALSE-POSITIVE TRAP (required): cheap pass's escalation proxy only counts "
                 "transfer_to_number/transfer_to_agent tool calls, so this agent shows a 0% "
                 "escalation rate and gets flagged as never escalating — but it DOES escalate, "
-                "correctly, via a ticket-creation tool the metric doesn't know to count. No KB is "
-                "promised (this agent's whole job is logging a ticket, not answering from policy "
-                "docs), and the closing line only asserts what create_support_ticket actually "
+                "correctly, via a ticket-creation tool the metric doesn't know to count. The prompt "
+                "is scoped to dispute intake only (not general billing policy/pricing Q&A), so no "
+                "KB is implied or promised — this agent's whole job is logging a ticket for what it "
+                "can't resolve. The closing line only asserts what create_support_ticket actually "
                 "supports (a ticket was logged) — not a refund outcome or a specific SLA it has no "
                 "way of confirming — so this stays a clean, single-criterion trap."
             ),
@@ -468,7 +476,28 @@ def _synthetic_cases() -> list[GoldenCase]:
         notes="Low-ARR twin of the case above — tests that identical judge output still routes differently by ARR (nearest_guidance + logged recipe gap, not an engineer).",
     ))
 
-    # S11 — knowledge_base: job needs one, none attached.
+    # S11 — knowledge_base: job needs one, none attached — plus it never
+    # escalates after failing twice in a row.
+    #
+    # Originally expected_classification="standard" with only knowledge_base
+    # expected to fail. A --backend live run disagreed, and looking hard at
+    # what this fixture actually contains (not just what it was meant to
+    # isolate), the live judge was right to: tools=() means there is
+    # genuinely no handoff path at all (a real handoff_no_transfer_tool,
+    # not incidental — S2/S3 above had that fixed by adding a tool; this
+    # agent truly has none), and the transcript shows it saying "I don't
+    # know" twice with zero attempt to hand off — a real, additional
+    # failure, not a hallucination. What actually forces the systemic tier
+    # is fallback_no_escalation_after_unknown: a defensible cause_code for
+    # exactly this "guessed... no, gave up — and never escalated" shape,
+    # but not (yet) in rubric.RECIPE_CATALOG. That's the classification
+    # rule working as designed (judge.py: one unmapped failure marks the
+    # whole agent systemic, no matter how healthy the rest) on a fixture
+    # that's genuinely worse than "one fixable gap" — updated the ground
+    # truth to match rather than editing the fixture to hide it. If
+    # fallback_no_escalation_after_unknown (or something like it) keeps
+    # showing up, that's the signal to add it to the catalog — see "The
+    # recipe catalog is the standard/systemic frontier" in README.
     cases.append(GoldenCase(
         snapshot=_snapshot(
             "synthetic_kb_missing", "Synthetic: Returns Policy Bot",
@@ -482,11 +511,29 @@ def _synthetic_cases() -> list[GoldenCase]:
                 _turn("agent", "Sorry, I don't have access to that either."),
             )),),
             arr_usd=10000.0,
-            synthetic_note="Knowledge-base failure: the prompt promises KB-backed answers but none is attached, so the agent can't answer anything it's supposed to handle.",
+            synthetic_note=(
+                "Knowledge-base failure: the prompt promises KB-backed answers but none is "
+                "attached, so the agent can't answer anything it's supposed to handle. Also "
+                "genuinely has no handoff tool of any kind, and never attempts to escalate after "
+                "failing the customer twice in a row — real, compounding failures, not just the "
+                "one this case was originally built to isolate."
+            ),
         ),
-        source="synthetic", should_flag=True, expected_classification="standard",
-        expected_failures={"knowledge_base": "kb_not_connected"},
-        notes="",
+        source="synthetic", should_flag=True, expected_classification="systemic",
+        # human_handoff and escalation_health get real, catalog-mapped
+        # causes; fallback gets None because fallback_no_escalation_after_unknown
+        # is not (yet) in rubric.RECIPE_CATALOG — see the comment above.
+        expected_failures={
+            "knowledge_base": "kb_not_connected",
+            "human_handoff": "handoff_no_transfer_tool",
+            "escalation_health": "escalation_rate_zero_with_missed_cases",
+            "fallback": None,
+        },
+        notes=(
+            "Originally a single-criterion standard case; a --backend live run showed the "
+            "fixture actually earns systemic on its own facts (see the S11 comment above) — the "
+            "ground truth was updated to match, not the fixture."
+        ),
     ))
 
     # S12 — system_prompt: self-contradictory.
