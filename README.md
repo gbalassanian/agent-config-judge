@@ -759,6 +759,45 @@ of 16 correctly-identified mapped failures, cause_code matched ground truth in 1
   metrics and re-reading the transcript rather than trusting the label I'd
   already written.
 
+### The first `--backend live` run
+
+Everything above is `--backend recorded` — self-graded, per the honesty
+note above it. The first time this actually ran against a live judge
+(`--backend live`, no ensemble, `claude-sonnet-5`) the self-graded 100%
+did not hold:
+
+```
+n=19  accuracy=84%
+of 5 agents that are actually healthy, judge wrongly flagged 2 (40%) as standard/systemic
+EXCEEDS the 30% recalibration threshold
+```
+
+That's the headline number, reported as measured — not the 100% above.
+Root-causing the misses (`scripts/diagnose_case.py`, evidence and all)
+found and fixed two real golden-set defects along the way: two required
+false-positive traps had incidental, un-isolated failures baked into
+their fixtures (an attached-but-never-used KB, an unattributed refund/SLA
+promise), and a third case's ground truth was simply wrong — it earns
+`systemic` on its own facts, not the `standard` originally written for it
+(see `eval/golden_set.py`'s comments on `synthetic_grounding_trap_user_
+number`, `synthetic_escalation_trap_ticket_tool`, and `synthetic_kb_
+missing`). None of that erases the 84%/40% above — those fixes are already
+folded into the golden set this number was computed against, and re-runs
+since still show real call-to-call variance (accuracy has ranged 68–84%,
+the false-positive rate 40–60%, across repeated `--backend live` runs
+against the same, now-fixed, 19 cases).
+
+One of the 2 healthy-agent false positives is `agent_1101` (Recruiter
+Agent) — and it isn't a new finding: this is the same ambiguous judgment
+call (does an internal, one-user roleplay tool need a customer-facing
+handoff mechanism?) `eval/golden_set.py`'s own docstring already named as
+unresolved, before any of this session's live runs. Excluding it —
+because it's a pre-existing documented disagreement, not a system
+defect — the false-positive rate over the remaining 4 healthy cases drops
+to 25%, under the threshold. Showing both numbers, with the exclusion
+made explicit, is the honest way to report this; replacing the 40%
+headline with the 25% one would not be.
+
 ## Path to scale
 
 Everything above runs against one workspace, on demand, with one API key
@@ -966,8 +1005,8 @@ first; see "Limitations" for why each one is a placeholder in more detail.
 | 9 | Evidence-quote discard rate, post-normalization (`judge.py`) | Unknown — `validator_notes` now ships in `--output` (see "Ahh ok, y a para no me quedo claro...") but nothing has counted it against real usage yet | Whether the residual "discarded as fabricated" rate is dominated by genuine paraphrase (worth building the turn-index-citation fix discussed above) or genuine altered facts (correctly rejected, nothing to fix) | Grep real `--backend live` reports for `"discarded as fabricated"` and manually read a sample of the flagged quotes against their real transcripts |
 | 10 | Self-serve fix time-to-resolution | Unknown | How long a `self_serve_fix` recommendation typically sits before a customer applies it (i.e. before the agent's fingerprint actually changes) — bounds how much the judge cache's repeated re-diagnosis on an unfixed, high-volume agent actually costs in practice | Track, per agent, the gap between "a self-serve recommendation was generated" and "the fingerprint next changed," once this runs against real customers |
 | 11 | Whether a 10th rubric criterion is needed (`rubric.py`) | Nine, chosen from real cases found while building this — see "Healthy is a defined scope" | A recurring gap the nine don't name | Three sources, none of them guesswork: a human periodically reading the judge's free-text `notes` field, real customer complaints about an agent this tool already called healthy, or occasional blind manual review of raw transcripts |
-| 12 | The eval numbers in "Eval results" | 100% across the board, on a golden set labeled by the same person who wrote the judge prompt | A real accuracy number, not a circularity artifact | A blind human labeler — someone who has never seen `rubric.py` — labeling a sample of real transcripts independently, compared against the judge's own read of the same data |
-| 13 | `EnsembleJudgeBackend`'s `max_extra_runs` default (`judge_ensemble.py`, `--ensemble-max-extra-runs`) | 2 | Whether 2 is the right number of confirmation calls, or whether the ~25% single-call miss rate it's based on even generalizes past the one case it was measured on | A repeatability eval — run the judge N times per golden-set case, live, and measure actual agreement — not yet built (see "A third judge backend" above); real per-criterion miss rates would also tell us whether a fixed N should vary by criterion |
+| 12 | The eval numbers in "Eval results" | Recorded (self-graded): 100%. First `--backend live` run: 84% accuracy, 40% false-positive rate (25% excluding `agent_1101`'s pre-existing documented ambiguity) — see "The first `--backend live` run" | A real accuracy number from ground truth nobody self-graded, plus enough repeated live runs to know whether 68–84% accuracy is real variance or a still-shrinking range | A blind human labeler — someone who has never seen `rubric.py` — labeling a sample of real transcripts independently, compared against the judge's own read of the same data |
+| 13 | `EnsembleJudgeBackend`'s `max_extra_runs` default (`judge_ensemble.py`, `--ensemble-max-extra-runs`) | 2 | Whether 2 is the right number of confirmation calls, or whether the ~25% single-call miss rate it's based on even generalizes past the one case it was measured on. Measured downside, not just theoretical: running `eval/run_eval.py --backend live --ensemble-max-extra-runs 2` made the false-positive rate WORSE in one run (40%→60%) — by design the ensemble only re-checks a clean read, so more attempts means more independent rolls where a single spurious fail (never cross-checked against the others) gets accepted as final. It protects the asymmetric risk it was built for (a missed real failure hiding behind one lucky clean call — see the module's own docstring) — it was never going to fix false positives, and this is the first real measurement of it actively costing something there | A repeatability eval — run the judge N times per golden-set case, live, and measure actual agreement — not yet built (see "A third judge backend" above); that same data would show whether a majority-vote variant (requiring 2-of-N agreement before trusting a FAIL, not just before trusting "healthy") is worth building for the false-positive side specifically |
 | 14 | `LiveJudgeBackend.max_tokens` (`judge.py`) | 16000 | Whether 16000 has real headroom to spare or is closer to the real ceiling this rubric's prompt + adaptive-thinking spend needs — found empirically that 4096 wasn't enough (see "Two judge backends, one validator" above), never measured where the actual line sits | Real thinking + output token counts logged across many live judge calls at this prompt's typical length, and again if a longer conversation sample ever gets judged in one call |
 | 15 | `CachedJudgeBackend.healthy_ttl_days` (`judge_cache.py`, `--judge-cache-healthy-ttl-days`) | Off by default; 30 is the value discussed as a starting point | Whether a cached "healthy" verdict's true risk should vary by how many ensemble attempts backed it (`ensemble_attempts`, already recorded per cache entry but not yet used) — a verdict that survived 3 confirmations is plausibly safe for longer than one that survived only 1, but nothing here has real data to back a specific ratio | Once this runs long enough to accumulate cache history: how often a dormant agent's cached "healthy" flips to a real failure on its first post-TTL re-judge, split by how many attempts originally backed it |
 

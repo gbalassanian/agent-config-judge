@@ -192,6 +192,23 @@ def _synthetic_cases() -> list[GoldenCase]:
     # escape hatch, so grounding is now the only criterion actually in
     # question. See scripts/diagnose_case.py's output on this case, and
     # README's "Eval results", for the run that caught this.
+    #
+    # KNOWN, STILL-OPEN AMBIGUITY on grounding specifically, found via
+    # diagnose_case.py after the fix above: ToolCallRecord (models.py) only
+    # records tool_name and is_error — there is no field anywhere in this
+    # data model for what a tool actually RETURNED. So "the shipping
+    # status/ETA is backed by the order_lookup tool call immediately
+    # before it" is an inference from adjacency, not something the data
+    # can literally confirm — a strict judge read has flagged this same
+    # claim as an unattributed assertion (grounding_missing_source_
+    # attribution) at least once live, arguing there's no visible tool
+    # payload to back it. That reading is defensible given what the data
+    # actually contains, not a hallucination — it's the same tool-vs-KB
+    # attribution question the real Operations Copilot case raises,
+    # sharpened by a real gap in this data model. The fix, if this keeps
+    # recurring, is a `result`/`output` field on ToolCallRecord (a bigger
+    # change touching cheap_pass.py, elevenlabs_client.py, and the judge
+    # prompt) — not another round of fixture patching.
     cases.append(GoldenCase(
         snapshot=_snapshot(
             "synthetic_grounding_trap_user_number", "Synthetic: Order Status Bot",
