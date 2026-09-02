@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from agent_config_judge.cheap_pass import score_agent
-from agent_config_judge.judge import LiveJudgeBackend, RecordedJudgeBackend, run_judge
+from agent_config_judge.judge import RecordedJudgeBackend, run_judge
 from agent_config_judge.rubric import CRITERION_ORDER
 from eval.golden_set import GoldenCase, load_golden_set
 
@@ -192,13 +192,30 @@ def main() -> None:
              "this report that isn't self-graded; see README's 'Eval results'.",
     )
     parser.add_argument("--model", default="claude-sonnet-5", help="Model id (--backend live only).")
+    parser.add_argument(
+        "--ensemble-max-extra-runs", type=int, default=0,
+        help="Same re-confirm-a-clean-read ensemble scan/evaluate use (judge_ensemble.py). 0 "
+             "(default): one call per case, the raw single-call number. >0: measures the system "
+             "as actually deployed instead of single-call noise — but only re-checks a CLEAN read; "
+             "a case that already fails on the first attempt (right or wrong) spends exactly one "
+             "call either way, same as today.",
+    )
     args = parser.parse_args()
 
+    # Reuses cli.py's own backend-construction wiring (ensemble wraps the
+    # raw backend, cache would sit outermost if this script ever grows
+    # --judge-cache too) instead of duplicating that ordering here.
+    from agent_config_judge import cli as _cli
+    build_args = argparse.Namespace(
+        backend=args.backend, model=args.model, fixture=None,
+        ensemble_max_extra_runs=args.ensemble_max_extra_runs, judge_cache=None,
+    )
+    backend: Any = _cli._build_judge_backend(build_args)
+
     if args.backend == "live":
-        backend: Any = LiveJudgeBackend(model=args.model)
-        print(f"--backend live: {len(load_golden_set())} real Anthropic API calls follow (model={args.model}).")
-    else:
-        backend = RecordedJudgeBackend(fixture_path=str(RECORDED_JUDGEMENTS_PATH))
+        extra = f", up to {1 + args.ensemble_max_extra_runs} calls/case with the ensemble" if args.ensemble_max_extra_runs else ""
+        print(f"--backend live: {len(load_golden_set())} real Anthropic API calls follow "
+              f"(model={args.model}{extra}).")
 
     results = run_all_cases(load_golden_set(), backend=backend)
     print_report(results)
