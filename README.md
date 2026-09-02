@@ -15,13 +15,18 @@ change to a customer's live agent.
 
 **Why this exists:** I built this with Claude Code to demonstrate the work
 an adoption/deployment-facing role actually does — proactively auditing
-customer agents' prompts, configs, and tool setup to find gaps at scale,
-instead of reviewing accounts one at a time by hand. The two-tier design (a
-free mechanical pass on every agent, an LLM read only for whatever that
-flags) answers "how do you audit a high-volume book without it becoming
-bespoke, manual work per account" — and the eval harness below exists so
-the detector's own accuracy is a measured number, not a claim. See "Path to
-scale" and the live dashboard's "Does this scale?" tab for what's real
+customer agents' prompts, configs, and tool setup to find gaps at scale. A
+deep, one-at-a-time read is exactly the right tool for one account someone's
+already asking about — `evaluate` below does exactly that, the same thing
+running it live against real agents this session amounted to — it just
+doesn't scale to running that read on every account in a book, all the
+time. The two-tier design (a free mechanical pass on every agent, an LLM
+read only for whatever that flags) is what decides which accounts earn the
+deep read instead of forcing a choice between doing it for all of them or
+none of them — answering "how do you audit a high-volume book without it
+becoming bespoke, manual work per account." The eval harness below exists
+so the detector's own accuracy is a measured number, not a claim. See "Path
+to scale" and the live dashboard's "Does this scale?" tab for what's real
 today versus still a plan.
 
 ## The problem this exists to solve
@@ -42,6 +47,8 @@ tiers:
    missed broken agent costs a client.
 
    ![Portfolio Console dashboard: 8 agents scored by the cheap pass, each card showing its score, its nine-criteria chips, and whether the judge tier has run yet](docs/screenshots/dashboard.png)
+
+   **[Open the live Portfolio Console →](https://claude.ai/code/artifact/406d6fcc-733a-47a3-8570-32310b85e4fb)** — the real, running dashboard the screenshot above is from (see "Live dashboard" below for what it does and doesn't show).
 
 2. **LLM judge** — reads the config *and* the transcripts of whatever got
    flagged, scores nine criteria with cited evidence, names a cause for every
