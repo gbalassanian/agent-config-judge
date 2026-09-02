@@ -1,33 +1,22 @@
 # agent-config-judge
 
-A two-tier detector for misconfigured ElevenLabs conversational voice agents,
-built to run against a whole portfolio of accounts, and just as usable
-checking one account on demand.
+**A two-tier detector for misconfigured ElevenLabs conversational voice
+agents** — automates what an Adoption Strategist does across a whole
+portfolio (`scan`) and what an FDE/Deployment Strategist does for one
+account on demand (`evaluate`): detect a concern, confirm it with cited
+evidence, recommend an action. A human still decides anything outside what
+this tool checks for (see "Limitations"), any ambiguous call, and any
+actual change to a live agent.
 
-**In one sentence:** this automates the repeatable, mechanical part of what
-an Adoption Strategist does across a whole portfolio (`scan`) and what an
-FDE/Deployment Strategist does for one account someone is asking about
-right now (`evaluate`) — detect a concern, confirm it with cited evidence,
-and recommend an action — while leaving explicitly to a human everything
-that still needs real judgment: a failure mode outside what this tool was
-built to check for (see "Limitations"), an ambiguous call, and any actual
-change to a customer's live agent.
-
-**Why this exists:** I built this with Claude Code to demonstrate the work
-an adoption/deployment-facing role actually does — proactively auditing
-customer agents' prompts, configs, and tool setup to find gaps at scale. A
-deep, one-at-a-time read is exactly the right tool for one account someone's
-already asking about — `evaluate` below does exactly that, the same thing
-running it live against real agents this session amounted to — it just
-doesn't scale to running that read on every account in a book, all the
-time. The two-tier design (a free mechanical pass on every agent, an LLM
-read only for whatever that flags) is what decides which accounts earn the
-deep read instead of forcing a choice between doing it for all of them or
-none of them — answering "how do you audit a high-volume book without it
-becoming bespoke, manual work per account." The eval harness below exists
-so the detector's own accuracy is a measured number, not a claim. See "Path
-to scale" and the live dashboard's "Does this scale?" tab for what's real
-today versus still a plan.
+**Why this exists:** I built this with Claude Code to demonstrate
+adoption/deployment work at scale — auditing agent configs and tool setup
+for gaps instead of reading every transcript by hand. A deep, one-at-a-time
+read (`evaluate`) is still the right tool for one account someone's asking
+about right now. The two-tier design (a free mechanical pass on everyone,
+an LLM read only for whoever that flags) decides who earns that read. The
+eval harness below keeps the detector's own accuracy a measured number, not
+a claim — see "Path to scale" and the live dashboard's "Does this scale?"
+tab for what's real today versus still a plan.
 
 ## The problem this exists to solve
 
