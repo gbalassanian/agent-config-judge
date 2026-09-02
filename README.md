@@ -673,6 +673,45 @@ why the cache and the healthy-TTL exist, and why a whole-portfolio `scan`
 defaults to judging only what the cheap pass flags instead of running
 this on every agent.
 
+#### The one run against a real workspace, no snapshot at all
+
+Every other example in this README — the golden set, the screenshots
+above, `fixtures/real_portfolio_snapshot.json` — runs against a frozen,
+already-fetched snapshot. This is the one exception: `evaluate` with
+neither `--snapshot` nor a fixture, live end to end, exercising
+`ElevenLabsClient` for real (`ELEVENLABS_API_KEY`) as well as the judge
+(`ANTHROPIC_API_KEY`):
+
+```
+$ PYTHONPATH=. python3 -m agent_config_judge.cli evaluate --agent-id agent_1101kynprgc8eky9mn86159whfr2 --backend live
+Fetching agent_1101kynprgc8eky9mn86159whfr2 live from ElevenLabs...
+  fetched: 2 conversation(s) sampled
+
+  agent_1101kynprgc8eky9mn86159whfr2 Recruiter Agent            cheap= 58.1 [flagged] -> systemic    action=nearest_guidance   approval=False
+      - human_handoff: handoff_no_transfer_tool
+          evidence (config field): tools
+      - latency: UNMAPPED
+          evidence (transcript): "Sounds like you've got a solid background in customer success and AI. What drew you to the Adoption Strategist role at ElevenLabs?"
+      ! recipe gap: latency cause='latency_llm_generation_spike'
+```
+
+This is Recruiter Agent — the same real agent this README's eval sections
+already discuss (`agent_1101`), and the same known, documented
+`human_handoff` disagreement shows up again here, live, straight from the
+workspace: consistent across every run this session, not a one-off. What's
+new is `latency`: the recorded snapshot never had TTFB data for this agent,
+so it always read `unknown` there. Live, sampling fresh conversations,
+the judge found a real generation-latency spike — with a cause_code,
+`latency_llm_generation_spike`, that isn't in `rubric.RECIPE_CATALOG` yet.
+That's a genuine, live `RecipeGap` (see "The recipe catalog is the
+standard/systemic frontier" above) — the first one this project has found
+on real production data rather than a synthetic or golden-set case. One
+occurrence isn't a pattern (see this file's own rule on recipes: added
+when a cause recurs, not the first time it shows up), so nothing gets
+added to the catalog off this alone — it's recorded here as exactly what
+this system is for: surfacing a real, specific, evidenced thing to look
+at, not a guess.
+
 ### Full pipeline with both real keys
 
 ```bash
