@@ -128,6 +128,12 @@ own portfolio, and it's why the judge tier exists at all:
 `fixtures/real_portfolio_snapshot.json` / `fixtures/recorded_judgements.json`;
 provenance and the raw shapes pulled are in `scripts/build_real_fixture.py`.)
 
+`agentjudge scan --backend live` finding this same failure for real, alongside
+the rest of the portfolio, judge tier actually invoked and evidence actually
+verified against the transcript — not a mock-up of what this would look like:
+
+![agentjudge scan --backend live output: five real agents triaged in one command, including the Onboarding Assistant / Twilio evidence above](docs/screenshots/scan-full-portfolio.png)
+
 ## What else the real portfolio turned up
 
 Five real agents got scanned (see "Running it" below for how to reproduce
@@ -372,6 +378,15 @@ while building this repo, from causes the real data actually produced:
 contradictory, just defines no role — the real `"Eres un asistente útil"`
 case). `agentjudge show-recipe <cause_code>` looks one up from the CLI.
 
+Caught live, on the same Operations Copilot agent above, on a run where the
+judge named a genuinely uncatalogued cause (`fallback_no_escalation_after_
+repeated_failure`) instead of force-fitting a known one: the single
+`UNMAPPED` failure pulls the whole agent from `standard` down to `systemic`,
+the action becomes `nearest_guidance` instead of an automatable fix, and the
+gap gets logged rather than silently absorbed —
+
+![agentjudge evaluate --backend live output: one unmapped cause_code (fallback_no_escalation_after_repeated_failure) drops the agent's classification from standard to systemic and logs a recipe gap](docs/screenshots/recipe-gap.png)
+
 ### Evidence is enforced, not requested
 
 Every judge verdict needs a short verbatim transcript quote or a named
@@ -489,6 +504,12 @@ exactly that gap, spending extra live calls only where they're worth it:
   `[ensemble] agent_1101...: used 1/3 attempt(s) (found a real failure)`),
   so it's never necessary to infer how many live calls actually happened
   from the Anthropic bill.
+
+That stderr line, captured for real off a live `--ensemble-max-extra-runs 2`
+run — the first attempt already found the real, evidence-validated failure,
+so it stopped there rather than spending the other two:
+
+![agentjudge evaluate --backend live --ensemble-max-extra-runs 2 output: "[ensemble] agent_1101...: used 1/3 attempt(s) (found a real failure)" followed by the triage line](docs/screenshots/ensemble-confirmation.png)
 
 **`--ensemble-max-extra-runs 2` is today's pick, not a calibrated number** —
 see calibration backlog row #13. It comes from that single 1-in-4 anecdote
