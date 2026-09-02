@@ -176,7 +176,7 @@ JUDGEMENTS: dict[str, dict] = {
         "criteria": {
             "system_prompt": crit("pass", field="system_prompt"),
             "knowledge_base": crit("pass", field="knowledge_base_ids"),
-            "human_handoff": crit("unknown"),
+            "human_handoff": crit("pass", field="tools"),
             "fallback": crit("unknown"),
             "grounding": crit("pass", quote="Your order 48213907 shipped yesterday and should arrive in 2 days."),
             "multi_turn": crit("unknown"),
@@ -188,7 +188,10 @@ JUDGEMENTS: dict[str, dict] = {
             "The order number and quantity are the customer's own words echoed back, not an "
             "agent assertion. The shipping status/ETA claim is new, but it's issued immediately "
             "after an order_lookup tool call in the same turn sequence — attributable to that "
-            "tool result, not fabricated, even though no KB document was used."
+            "tool result, not fabricated, even though no KB document was used. No "
+            "knowledge_base_ids are attached at all, and none are promised — this agent's whole "
+            "job runs through order_lookup, not a policy doc. transfer_to_agent is configured, "
+            "so there's a working escape hatch even though this transcript never needs it."
         ),
     },
 
@@ -198,9 +201,9 @@ JUDGEMENTS: dict[str, dict] = {
             "knowledge_base": crit("pass", field="knowledge_base_ids"),
             "human_handoff": crit("pass", field="tools"),
             "fallback": crit("unknown"),
-            "grounding": crit("unknown"),
+            "grounding": crit("pass", quote="I've logged this with our billing team as case #8841"),
             "multi_turn": crit("unknown"),
-            "escalation_health": crit("pass", quote="I've opened ticket #8841 for our billing team"),
+            "escalation_health": crit("pass", quote="I've logged this with our billing team as case #8841"),
             "sentiment": crit("unknown"),
             "latency": crit("unknown"),
         },
@@ -211,7 +214,11 @@ JUDGEMENTS: dict[str, dict] = {
             "working (asynchronous) path to get a human involved, and the prompt is explicit "
             "that this channel has no live transfer. escalation_health is the required trap: "
             "the metric proxy counts zero transfer-tool calls, but the ticket creation is a real, "
-            "correct escalation."
+            "correct escalation. No knowledge_base_ids are attached — this agent's job is logging "
+            "a ticket, not answering from policy docs, so nothing is promised there either. The "
+            "closing line only asserts what create_support_ticket actually supports (a ticket was "
+            "logged, immediately after the tool call) — it no longer promises a refund outcome or "
+            "a specific SLA the tool has no way of confirming, so grounding passes too."
         ),
     },
 
@@ -344,15 +351,24 @@ JUDGEMENTS: dict[str, dict] = {
         "criteria": {
             "system_prompt": crit("pass", field="system_prompt"),
             "knowledge_base": crit("fail", field="knowledge_base_ids", cause="kb_not_connected"),
-            "human_handoff": crit("unknown"),
-            "fallback": crit("pass", quote="I don't have that information available right now."),
+            "human_handoff": crit("fail", field="tools", cause="handoff_no_transfer_tool"),
+            "fallback": crit("fail", quote="Sorry, I don't have access to that either.", cause="fallback_no_escalation_after_unknown"),
             "grounding": crit("unknown"),
             "multi_turn": crit("unknown"),
-            "escalation_health": crit("unknown"),
+            "escalation_health": crit("fail", quote="Sorry, I don't have access to that either.", cause="escalation_rate_zero_with_missed_cases"),
             "sentiment": crit("unknown"),
             "latency": crit("unknown"),
         },
-        "notes": "The prompt promises KB-backed policy answers but no KB is attached; the agent correctly admits it doesn't know rather than guessing (fallback pass), it just can't answer anything in its supposed job at all.",
+        "notes": (
+            "The prompt promises KB-backed policy answers but no KB is attached, so knowledge_base "
+            "fails. tools=() means there is genuinely no handoff path either. The agent correctly "
+            "admits it doesn't know rather than guessing, but fails the customer twice in a row "
+            "and never once attempts to escalate — a real fallback and escalation_health failure, "
+            "not just the one this case was originally built to isolate. "
+            "fallback_no_escalation_after_unknown has no entry in rubric.RECIPE_CATALOG, which is "
+            "what correctly forces this agent to systemic rather than standard — a real recipe "
+            "gap, not a misjudgment."
+        ),
     },
 
     "synthetic_system_prompt_contradiction": {
