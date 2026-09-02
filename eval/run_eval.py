@@ -1,5 +1,12 @@
 """The eval harness. Run: PYTHONPATH=. python3 eval/run_eval.py
 
+Defaults to the recorded backend (no API key needed, reproducible run to
+run) — pass `--backend live` for a real `ANTHROPIC_API_KEY` call per case
+instead. Recorded is not a shortcut standing in for live: see README's "How
+the recorded judgements were produced" for exactly why a `--backend live`
+run is the one number here that isn't self-graded, and "Eval results" for
+what changed the first time this actually ran against a live judge.
+
 Reports three separate scorecards because the three tiers fail in
 different directions and blending them into one number would hide that:
 
@@ -23,11 +30,13 @@ README repeats it before quoting any of these numbers.
 
 from __future__ import annotations
 
+import argparse
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from agent_config_judge.cheap_pass import score_agent
-from agent_config_judge.judge import RecordedJudgeBackend, run_judge
+from agent_config_judge.judge import LiveJudgeBackend, RecordedJudgeBackend, run_judge
 from agent_config_judge.rubric import CRITERION_ORDER
 from eval.golden_set import GoldenCase, load_golden_set
 
@@ -51,8 +60,9 @@ class CaseResult:
     judge_failures: dict[str, str | None]  # criterion_id -> cause_code (None if unmapped)
 
 
-def run_all_cases(cases: list[GoldenCase]) -> list[CaseResult]:
-    backend = RecordedJudgeBackend(fixture_path=str(RECORDED_JUDGEMENTS_PATH))
+def run_all_cases(cases: list[GoldenCase], backend: Any = None) -> list[CaseResult]:
+    if backend is None:
+        backend = RecordedJudgeBackend(fixture_path=str(RECORDED_JUDGEMENTS_PATH))
     results = []
     for case in cases:
         cp = score_agent(case.snapshot.config, case.snapshot.metrics)
@@ -174,7 +184,23 @@ def print_report(results: list[CaseResult]) -> None:
 
 
 def main() -> None:
-    results = run_all_cases(load_golden_set())
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--backend", choices=["recorded", "live"], default="recorded",
+        help="recorded (default): replay fixtures/recorded_judgements.json, no API key needed. "
+             "live: a real ANTHROPIC_API_KEY call per case (19 calls total) — the one number in "
+             "this report that isn't self-graded; see README's 'Eval results'.",
+    )
+    parser.add_argument("--model", default="claude-sonnet-5", help="Model id (--backend live only).")
+    args = parser.parse_args()
+
+    if args.backend == "live":
+        backend: Any = LiveJudgeBackend(model=args.model)
+        print(f"--backend live: {len(load_golden_set())} real Anthropic API calls follow (model={args.model}).")
+    else:
+        backend = RecordedJudgeBackend(fixture_path=str(RECORDED_JUDGEMENTS_PATH))
+
+    results = run_all_cases(load_golden_set(), backend=backend)
     print_report(results)
 
 
