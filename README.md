@@ -668,6 +668,15 @@ in a row doesn't pay for the judge twice either, its healthy-verdict TTL
 backend" above), so an on-demand check can also confirm a clean read
 before trusting it.
 
+What one of these calls actually costs: individual `--backend live` runs
+against real portfolio agents this session (Sonnet 5, real Anthropic
+billing) have landed **around $0.03–$0.07 per call**, ~$0.05 on average —
+one agent's config plus its sampled conversations, in and out. That's the
+number "a real dollar cost per call" above means concretely; it's also
+why the cache and the healthy-TTL exist, and why a whole-portfolio `scan`
+defaults to judging only what the cheap pass flags instead of running
+this on every agent.
+
 ### Full pipeline with both real keys
 
 ```bash
