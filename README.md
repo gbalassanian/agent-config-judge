@@ -41,11 +41,18 @@ tiers:
    transcripts read, no LLM called. Its only job is deciding who gets read in
    depth. It over-flags on purpose: a false flag costs one judge call; a
    missed broken agent costs a client.
+
+   ![Portfolio Console dashboard: 8 agents scored by the cheap pass, each card showing its score, its nine-criteria chips, and whether the judge tier has run yet](docs/screenshots/dashboard.png)
+
 2. **LLM judge** — reads the config *and* the transcripts of whatever got
    flagged, scores nine criteria with cited evidence, names a cause for every
    failure, and maps that cause onto a recipe catalog. A cause with a known
    fix is **standard** (automatable); a cause with no known fix is
    **systemic** (needs a human) — by construction, not by judgment call.
+
+   ![agentjudge scan --backend live: five real agents triaged by the judge in one command](docs/screenshots/scan-full-portfolio.png)
+   ![agentjudge evaluate --backend live: an uncatalogued cause_code pulls an agent from standard to systemic and logs a recipe gap](docs/screenshots/recipe-gap.png)
+   ![agentjudge evaluate --backend live --ensemble-max-extra-runs 2: the ensemble confirming a real failure on its first attempt](docs/screenshots/ensemble-confirmation.png)
 
 A router then turns (classification × account ARR) into exactly one action.
 Detection is 100% automated; anything that would touch a customer's live
