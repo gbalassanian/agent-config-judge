@@ -13,17 +13,16 @@ that still needs real judgment: a failure mode outside what this tool was
 built to check for (see "Limitations"), an ambiguous call, and any actual
 change to a customer's live agent.
 
-**Why this exists:** I built this to demonstrate, end to end, the exact work
-an adoption/deployment-facing role at ElevenLabs actually does — proactively
-auditing customer agents' prompts, configs, and tool setup to find gaps at
-scale, instead of reviewing accounts one at a time by hand. The two-tier
-design (a free mechanical pass on every agent, an LLM read only for whatever
-that flags) is the concrete answer to "how do you audit a high-volume book
-without it becoming bespoke, manual work per account" — and the eval harness
-below exists so the detector's own accuracy is a measured number, not a
-claim. See "Path to scale" and the live dashboard's "Does this scale?" tab
-for the honest version of what's real production-ready today versus still a
-plan.
+**Why this exists:** I built this with Claude Code to demonstrate the work
+an adoption/deployment-facing role actually does — proactively auditing
+customer agents' prompts, configs, and tool setup to find gaps at scale,
+instead of reviewing accounts one at a time by hand. The two-tier design (a
+free mechanical pass on every agent, an LLM read only for whatever that
+flags) answers "how do you audit a high-volume book without it becoming
+bespoke, manual work per account" — and the eval harness below exists so
+the detector's own accuracy is a measured number, not a claim. See "Path to
+scale" and the live dashboard's "Does this scale?" tab for what's real
+today versus still a plan.
 
 ## The problem this exists to solve
 
