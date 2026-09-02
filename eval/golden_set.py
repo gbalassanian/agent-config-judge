@@ -177,13 +177,31 @@ def _synthetic_cases() -> list[GoldenCase]:
     # (and the one new claim the agent DOES make is backed by a tool call,
     # not a KB doc — the same tool-vs-KB attribution the real Operations
     # Copilot case raises, deliberately doubled up here).
+    #
+    # No knowledge_base_ids and a transfer_to_agent tool alongside
+    # order_lookup: a first --backend live run against the ORIGINAL version
+    # of this fixture (which had kb_ids=("kb_policies",) attached-and-never-
+    # used, and no transfer tool at all) came back "standard", not the
+    # "healthy" this case requires — not a judge bug: kb_connected_but_unused
+    # and handoff_no_transfer_tool were both a correct read of what that
+    # fixture actually contained, which this case's own expected_failures={}
+    # never accounted for because the case was built to isolate grounding
+    # only. Fixed by removing the incidental KB (this scenario doesn't need
+    # one — a narrow, tool-backed order-status flow, the same "no KB
+    # promised" shape agent_1101 already covers) and giving it a genuine
+    # escape hatch, so grounding is now the only criterion actually in
+    # question. See scripts/diagnose_case.py's output on this case, and
+    # README's "Eval results", for the run that caught this.
     cases.append(GoldenCase(
         snapshot=_snapshot(
             "synthetic_grounding_trap_user_number", "Synthetic: Order Status Bot",
             "You are an order status agent. Confirm the order number the customer gives you "
             "and look up its status using the order_lookup tool.",
-            tools=(ToolConfig(name="order_lookup", tool_type="webhook", detail="https://acme.example/orders"),),
-            kb_ids=("kb_policies",),
+            tools=(
+                ToolConfig(name="order_lookup", tool_type="webhook", detail="https://acme.example/orders"),
+                ToolConfig(name="transfer_to_agent", tool_type="system", system_tool_type="transfer_to_agent"),
+            ),
+            kb_ids=(),
             conversations=(ConversationRecord("c1", "widget", (
                 _turn("agent", "Hi! What's your order number?"),
                 _turn("user", "It's 48213907, and I ordered 3 units."),
@@ -198,7 +216,9 @@ def _synthetic_cases() -> list[GoldenCase]:
                 "number and quantity are the customer's OWN words echoed back, and the shipping "
                 "status/ETA is backed by the order_lookup tool call immediately before it (visible "
                 "in the transcript, just not as a used_static_kb_document_ids entry). Correct "
-                "grounding verdict is pass; nothing here is an ungrounded, unattributed claim."
+                "grounding verdict is pass; nothing here is an ungrounded, unattributed claim. No KB "
+                "is promised (order lookup runs entirely through the tool) and transfer_to_agent "
+                "gives it a real escape hatch, so this stays a clean, single-criterion trap."
             ),
         ),
         source="synthetic", should_flag=True, expected_classification="healthy",
@@ -207,6 +227,20 @@ def _synthetic_cases() -> list[GoldenCase]:
     ))
 
     # S3 — TRAP: escalation proxy counts zero because escalation happens via a ticket tool.
+    #
+    # No knowledge_base_ids, and the closing line no longer promises a
+    # refund or a specific turnaround: a first --backend live run against
+    # the ORIGINAL version of this fixture (kb_ids=("kb_billing",)
+    # attached-and-never-used, plus "they'll refund the duplicate charge and
+    # follow up by email within 1 business day") came back "standard" —
+    # again not a judge bug. kb_connected_but_unused was a correct read (the
+    # KB really was never touched), and grounding_missing_source_attribution
+    # was arguably correct too: create_support_ticket logs a ticket, it
+    # doesn't confirm a refund or commit to a one-day SLA, so that line was
+    # a real unattributed promise, not the kind of tool-derived claim S2's
+    # order-status line is. Fixed by dropping the incidental KB and
+    # softening the claim to only what logging a ticket actually supports,
+    # so escalation_health stays the one criterion this case is testing.
     cases.append(GoldenCase(
         snapshot=_snapshot(
             "synthetic_escalation_trap_ticket_tool", "Synthetic: Billing Support Bot",
@@ -214,19 +248,23 @@ def _synthetic_cases() -> list[GoldenCase]:
             "support ticket for a human to follow up — do not tell the customer you'll "
             "'transfer' them, since this channel has no live transfer.",
             tools=(ToolConfig(name="create_support_ticket", tool_type="webhook", detail="https://acme.example/tickets"),),
-            kb_ids=("kb_billing",),
+            kb_ids=(),
             conversations=(ConversationRecord("c1", "widget", (
                 _turn("agent", "Hi, what's up with your billing?"),
                 _turn("user", "I was charged twice for the same invoice and need a refund."),
                 _turn("agent", None, tool_calls=(ToolCallRecord("create_support_ticket", False),)),
-                _turn("agent", "I've logged this with our billing team as case #8841 — they'll refund the duplicate charge and follow up by email within 1 business day."),
+                _turn("agent", "I've logged this with our billing team as case #8841 — they'll review it and follow up with you directly."),
             )),),
             arr_usd=25000.0,
             synthetic_note=(
                 "FALSE-POSITIVE TRAP (required): cheap pass's escalation proxy only counts "
                 "transfer_to_number/transfer_to_agent tool calls, so this agent shows a 0% "
                 "escalation rate and gets flagged as never escalating — but it DOES escalate, "
-                "correctly, via a ticket-creation tool the metric doesn't know to count."
+                "correctly, via a ticket-creation tool the metric doesn't know to count. No KB is "
+                "promised (this agent's whole job is logging a ticket, not answering from policy "
+                "docs), and the closing line only asserts what create_support_ticket actually "
+                "supports (a ticket was logged) — not a refund outcome or a specific SLA it has no "
+                "way of confirming — so this stays a clean, single-criterion trap."
             ),
         ),
         source="synthetic", should_flag=True, expected_classification="healthy",

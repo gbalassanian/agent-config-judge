@@ -374,9 +374,9 @@
         "cause_code": null
       },
       "human_handoff": {
-        "verdict": "unknown",
+        "verdict": "pass",
         "evidence_quote": null,
-        "evidence_config_field": null,
+        "evidence_config_field": "tools",
         "cause_code": null
       },
       "fallback": {
@@ -416,7 +416,7 @@
         "cause_code": null
       }
     },
-    "notes": "The order number and quantity are the customer's own words echoed back, not an agent assertion. The shipping status/ETA claim is new, but it's issued immediately after an order_lookup tool call in the same turn sequence — attributable to that tool result, not fabricated, even though no KB document was used.",
+    "notes": "The order number and quantity are the customer's own words echoed back, not an agent assertion. The shipping status/ETA claim is new, but it's issued immediately after an order_lookup tool call in the same turn sequence — attributable to that tool result, not fabricated, even though no KB document was used. No knowledge_base_ids are attached at all, and none are promised — this agent's whole job runs through order_lookup, not a policy doc. transfer_to_agent is configured, so there's a working escape hatch even though this transcript never needs it.",
     "agent_id": "synthetic_grounding_trap_user_number"
   },
   "synthetic_escalation_trap_ticket_tool": {
@@ -446,8 +446,8 @@
         "cause_code": null
       },
       "grounding": {
-        "verdict": "unknown",
-        "evidence_quote": null,
+        "verdict": "pass",
+        "evidence_quote": "I've logged this with our billing team as case #8841",
         "evidence_config_field": null,
         "cause_code": null
       },
@@ -476,7 +476,7 @@
         "cause_code": null
       }
     },
-    "notes": "human_handoff is pass here on a distinct call from the cheap pass's own check: cheap_pass only recognizes transfer_to_number/transfer_to_agent as a working handoff, so it will have flagged this agent too — but create_support_ticket IS a working (asynchronous) path to get a human involved, and the prompt is explicit that this channel has no live transfer. escalation_health is the required trap: the metric proxy counts zero transfer-tool calls, but the ticket creation is a real, correct escalation.",
+    "notes": "human_handoff is pass here on a distinct call from the cheap pass's own check: cheap_pass only recognizes transfer_to_number/transfer_to_agent as a working handoff, so it will have flagged this agent too — but create_support_ticket IS a working (asynchronous) path to get a human involved, and the prompt is explicit that this channel has no live transfer. escalation_health is the required trap: the metric proxy counts zero transfer-tool calls, but the ticket creation is a real, correct escalation. No knowledge_base_ids are attached — this agent's job is logging a ticket, not answering from policy docs, so nothing is promised there either. The closing line only asserts what create_support_ticket actually supports (a ticket was logged, immediately after the tool call) — it no longer promises a refund outcome or a specific SLA the tool has no way of confirming, so grounding passes too.",
     "agent_id": "synthetic_escalation_trap_ticket_tool"
   },
   "synthetic_fallback_fail": {
