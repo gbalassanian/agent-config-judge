@@ -712,6 +712,48 @@ added to the catalog off this alone — it's recorded here as exactly what
 this system is for: surfacing a real, specific, evidenced thing to look
 at, not a guess.
 
+#### A second live run: catching a judge cache gone stale
+
+The same command, run later against a different real agent
+(`agent_5301kyangh7yetavdwrr5xt3ndqd`, No Borders - Intake — the same agent
+behind the golden-set row above, which was scored from an earlier snapshot
+of it):
+
+```
+$ PYTHONPATH=. python3 -m agent_config_judge.cli evaluate --agent-id agent_5301kyangh7yetavdwrr5xt3ndqd --backend live --sample-size 20
+Fetching agent_5301kyangh7yetavdwrr5xt3ndqd live from ElevenLabs...
+  fetched: 11 conversation(s) sampled
+
+  agent_5301kyangh7yetavdwrr5xt3ndqd No Borders - Intake       cheap= 77.3 [FORCED ] -> standard    action=targeted_nudge    approval=False
+      - knowledge_base: kb_connected_but_unused
+          evidence (config field): knowledge_base_ids / rag_enabled
+      - human_handoff: handoff_tool_unsupported_on_channel
+          evidence (config field): tools[2].system_tool_type=transfer_to_number
+      - multi_turn: multi_turn_repeats_known_answer
+          evidence (transcript): "First, could I please get your full name?"
+```
+
+~$0.12 for this call. What makes this run worth recording isn't the dollar
+figure, it's what it caught: the "Portfolio Console" dashboard's cached
+judge read for this same agent still said `handoff_no_transfer_tool` — no
+transfer tool configured at all. That was true once. Since then a
+`transfer_to_number` tool was added to the config, so every cheap-pass
+refresh since kept forcing this agent back to the judge queue (any tool
+error in the sample forces a re-read regardless of score — see "Architecture"
+above), but the daily refresh only ever touches tier 1, on purpose (see
+"The daily production flow"); it will never silently re-run the judge
+itself, so that stale `handoff_no_transfer_tool` verdict sat there,
+looking plausible, until someone actually asked for a fresh read. This
+run is that ask, and the real cause turned out to be different:
+`handoff_tool_unsupported_on_channel` — the tool exists now, it just can't
+work on the `react_sdk` channel this agent actually runs on. Two more
+failures the cached read never had at all also surfaced:
+`kb_connected_but_unused` (a knowledge base attached but never retrieved)
+and `multi_turn_repeats_known_answer` (re-asking for the caller's name
+after already getting it). Same agent, same "standard" classification
+label — genuinely different, more current diagnosis underneath it. The
+dashboard now reflects this fresh read.
+
 ### Full pipeline with both real keys
 
 ```bash
